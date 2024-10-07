@@ -29,7 +29,7 @@ cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>
 #### Working example
 
 ```shell
-cargo run -- namespace 10 1000
+cargo run -- junkdata 10 1000
 ```
 
-This posts to the "namespace" namespace with 10 blobs of 1000 bytes each.
+This posts to the "junkdata" namespace with 10 blobs of 1000 bytes each.
