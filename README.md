@@ -1,6 +1,14 @@
 # dummy_rollup
 
 This is a dummy rollup project to test the Celenium API.
+## Prerequisites
+
+- Rust
+- Celestia light node running
+
+```shell
+celestia light start --core.ip rpc-mocha.pops.one --p2p.network mocha --rpc.skip-auth
+```
 
 ## Usage
 
