@@ -61,7 +61,7 @@ This command posts continuously to the "junkdata" namespace with 10 blobs of 100
 
 If there are any issues with the submission, the program will print an error message and continue attempting to submit new batches.
 
-#### Example Output
+#### Example output
 
 When running the example command, you should see output similar to the following:
 
