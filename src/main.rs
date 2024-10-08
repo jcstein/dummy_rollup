@@ -3,6 +3,10 @@ use celestia_rpc::{BlobClient, Client};
 use celestia_types::{nmt::Namespace, Blob, TxConfig};
 use rand::RngCore;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,17 +31,38 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to connect to Celestia node")?;
 
-    let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
-
+    println!("Starting continuous blob submission. Press Ctrl+C to stop.");
     println!(
-        "Posting {} blobs of size {} bytes each with namespace '{}'...",
+        "Submitting batches of {} blobs, each {} bytes, with namespace '{}'",
         num_blobs, blob_size, namespace_plaintext
     );
-    let result = BlobClient::blob_submit(&client, blobs.as_slice(), TxConfig::default()).await?;
 
-    println!("Blobs submitted successfully!");
-    println!("Result: {:?}", result);
+    // Set up Ctrl+C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+        println!("\nShutting down gracefully...");
+    })
+    .expect("Error setting Ctrl-C handler");
 
+    while running.load(Ordering::SeqCst) {
+        let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
+
+        match BlobClient::blob_submit(&client, blobs.as_slice(), TxConfig::default()).await {
+            Ok(result) => {
+                println!("Batch submitted successfully!");
+                println!("Result: {:?}", result);
+            }
+            Err(e) => {
+                eprintln!("Error submitting batch: {:?}", e);
+            }
+        }
+
+        sleep(Duration::from_secs(5)).await;
+    }
+
+    println!("Blob submission stopped.");
     Ok(())
 }
 
