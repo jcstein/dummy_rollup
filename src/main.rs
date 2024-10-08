@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     while running.load(Ordering::SeqCst) {
         let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
 
-        match BlobClient::blob_submit(&client, blobs.as_slice(), TxConfig::default()).await {
+        match client.blob_submit(&blobs, TxConfig::default()).await {
             Ok(result) => {
                 println!("Batch submitted successfully!");
                 println!("Result: {:?}", result);
@@ -77,7 +77,8 @@ fn generate_random_blobs(
     for _ in 0..num_blobs {
         let mut random_data = vec![0u8; blob_size];
         rng.fill_bytes(&mut random_data);
-        let blob = Blob::new(namespace.clone(), random_data)?;
+        let blob = Blob::new(namespace.clone(), random_data)
+            .map_err(|e| anyhow::anyhow!("Failed to create blob: {}", e))?;
         blobs.push(blob);
     }
 
