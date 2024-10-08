@@ -30,7 +30,7 @@ The project uses the following dependencies:
 
 ### Build
 
-To build the dummy_rollup, run:
+To build the dummy_rollup:
 
 ```shell
 cargo build
@@ -38,7 +38,7 @@ cargo build
 
 ### Run
 
-To run the dummy_rollup, use the following command:
+To run the dummy_rollup:
 
 ```shell
 cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>
