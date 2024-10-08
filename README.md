@@ -1,7 +1,6 @@
 # dummy_rollup
 
 This is a dummy rollup project to test the Celenium API.
-The program will continuously submit batches of blobs to the Celestia node every 5 seconds. To stop the submission, press `Ctrl+C`. The program will handle the shutdown gracefully.
 
 ## Prerequisites
 
@@ -49,6 +48,8 @@ Where:
 - `<namespace_plaintext>`: The plaintext string that will be converted to a hexadecimal namespace.
 - `<number_of_blobs>`: The number of blobs to generate and submit in each batch.
 - `<blob_size_in_bytes>`: The size of each blob in bytes.
+
+The program will continuously submit batches of blobs to the Celestia node every 5 seconds. To stop the submission, press `Ctrl+C`. The program will handle the shutdown gracefully.
 
 #### Example
 
