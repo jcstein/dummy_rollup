@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use celestia_rpc::{BlobClient, Client};
-use celestia_types::{nmt::Namespace, Blob, TxConfig};
+use celestia_types::{nmt::Namespace, AppVersion, Blob, TxConfig};
 use rand::RngCore;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,7 +77,7 @@ fn generate_random_blobs(
     for _ in 0..num_blobs {
         let mut random_data = vec![0u8; blob_size];
         rng.fill_bytes(&mut random_data);
-        let blob = Blob::new(namespace.clone(), random_data)
+        let blob = Blob::new(namespace.clone(), random_data, AppVersion::V2)
             .map_err(|e| anyhow::anyhow!("Failed to create blob: {}", e))?;
         blobs.push(blob);
     }

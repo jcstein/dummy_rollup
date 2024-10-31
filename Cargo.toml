@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-celestia-rpc = "0.5.0"
-celestia-types = "0.6.0"
+celestia-rpc = "0.7.0"
+celestia-types = "0.7.0"
 tokio = { version = "1.40.0", features = ["full"] }
 anyhow = "1.0.89"
 hex = "0.4.3"
