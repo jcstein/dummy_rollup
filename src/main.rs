@@ -8,6 +8,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
+async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> Result<Vec<Blob>> {
+    let blobs = client
+        .blob_get_all(height, &[namespace.clone()])
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to retrieve blobs: {}", e))?
+        .unwrap_or_default();
+    Ok(blobs)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -48,11 +57,51 @@ async fn main() -> Result<()> {
 
     while running.load(Ordering::SeqCst) {
         let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
+        let submitted_data: Vec<Vec<u8>> = blobs.iter().map(|b| b.data.clone()).collect();
 
         match client.blob_submit(&blobs, TxConfig::default()).await {
-            Ok(result) => {
+            Ok(result_height) => {
                 println!("Batch submitted successfully!");
-                println!("Result: {:?}", result);
+                println!("Result height: {}", result_height);
+
+                // Wait a bit for the block to be processed
+                sleep(Duration::from_secs(2)).await;
+
+                println!("Checking height {}...", result_height);
+                match retrieve_blobs(&client, result_height, &namespace).await {
+                    Ok(retrieved_blobs) => {
+                        if !retrieved_blobs.is_empty() {
+                            println!(
+                                "Found {} blobs at height {}",
+                                retrieved_blobs.len(),
+                                result_height
+                            );
+
+                            // Verify the retrieved blobs match what we submitted
+                            let retrieved_data: Vec<Vec<u8>> = retrieved_blobs
+                                .iter()
+                                .map(|b| b.data.clone())
+                                .collect();
+
+                            for (i, (submitted, retrieved)) in submitted_data
+                                .iter()
+                                .zip(retrieved_data.iter())
+                                .enumerate()
+                            {
+                                if submitted == retrieved {
+                                    println!("✅ Blob {} verified successfully", i);
+                                } else {
+                                    println!("❌ Blob {} verification failed", i);
+                                }
+                            }
+                        } else {
+                            println!("No blobs found at height {}", result_height);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error retrieving blobs at height {}: {:?}", result_height, e);
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("Error submitting batch: {:?}", e);
