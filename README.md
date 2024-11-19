@@ -20,8 +20,8 @@ celestia light start --core.ip rpc-mocha.pops.one --p2p.network mocha --rpc.skip
 The project uses the following dependencies:
 
 - `anyhow`: For error handling.
-- `celestia_rpc`: For interacting with the Celestia node.
-- `celestia_types`: For handling Celestia-specific types like `Namespace` and `Blob`.
+- [`celestia_rpc`](https://crates.io/crates/celestia-rpc): For interacting with the Celestia node.
+- [`celestia_types`](https://crates.io/crates/celestia-types): For handling Celestia-specific types like `Namespace` and `Blob`.
 - `rand`: For generating random data for the blobs.
 - `tokio`: For asynchronous runtime.
 - `ctrlc`: For handling `Ctrl+C` interrupts.
