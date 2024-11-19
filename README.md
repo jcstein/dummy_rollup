@@ -67,7 +67,7 @@ When running the example command, you should see output similar to the following
 
 ```
 Starting continuous blob submission. Press Ctrl+C to stop.
-Submitting batches of 9 blobs, each 197278 bytes, with namespace 'giveuup'
+Submitting batches of 10 blobs, each 197278 bytes, with namespace 'junkdata'
 Batch submitted successfully!
 Result height: 3216604
 Checking height 3216604...
@@ -81,6 +81,7 @@ Found 9 blobs at height 3216604
 ✅ Blob 6 verified successfully
 ✅ Blob 7 verified successfully
 ✅ Blob 8 verified successfully
+✅ Blob 9 verified successfully
 ...
 ```
 
