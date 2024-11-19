@@ -1,6 +1,6 @@
 # dummy_rollup
 
-This is a dummy rollup project to test the Celenium API.
+This is a dummy rollup project to test posting and retrieving data from Celestia.
 
 ## Prerequisites
 
