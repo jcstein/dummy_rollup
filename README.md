@@ -45,48 +45,73 @@ cargo build
 
 ### Run
 
-To make a move in the game:
+To start or join a game:
 
 ```shell
-cargo run -- <namespace_plaintext> <start_height> <position>
+cargo run -- <namespace_plaintext> <start_height>
 ```
 
 Where:
 - `<namespace_plaintext>`: The game identifier that will be converted to a hexadecimal namespace
 - `<start_height>`: The blockchain height where the game started
-- `<position>`: Position on the board (0-8) where you want to place your mark
-
-The board positions are numbered as follows:
-```
-0 1 2
-3 4 5
-6 7 8
-```
 
 #### Example
 
 ```shell
-cargo run -- game1 2870188 4
+cargo run -- game1 2870188
 ```
 
 This command:
 - Joins/creates a game called "game1"
 - Looks for moves starting from height 2870188
-- Places a mark in the center position (4)
 
-#### Example output
+### Gameplay
 
-When running the command, you'll see output similar to:
+When you start the game, you'll see a board guide showing the position numbers:
 
 ```
+=== Tic Tac Toe Board Positions ===
+Use these numbers to make your move:
+
+0 | 1 | 2
+---------
+3 | 4 | 5
+---------
+6 | 7 | 8
+
+Enter 'q' to quit the game
+================================
+```
+
+During gameplay:
+- Enter a number 0-8 to make your move
+- Enter 'q' to quit the game
+
+#### Example gameplay
+
+```
+Current board state:
+. | . | .
+---------
+. | . | .
+---------
+. | . | .
+
+Player X's turn
+Enter position (0-8) or 'q' to quit:
+4
+
 Move submitted at height: 2870190
 
 Current board state:
-. . .
-. X .
-. . .
+. | . | .
+---------
+. | X | .
+---------
+. | . | .
 
-Game is still in progress...
+Player O's turn
+Enter position (0-8) or 'q' to quit:
 ```
 
 The board shows:
@@ -94,4 +119,7 @@ The board shows:
 - `X` for player 1's moves
 - `O` for player 2's moves
 
-The game will indicate when someone wins or when it's a draw.
+The game continues until:
+- A player wins
+- The game ends in a draw
+- A player quits by entering 'q'

@@ -16,6 +16,18 @@ const WINNING_COMBINATIONS: [[usize; 3]; 8] = [
     [2, 4, 6], // Diagonal
 ];
 
+fn show_board_guide() {
+    println!("\n=== Tic Tac Toe Board Positions ===");
+    println!("Use these numbers to make your move:\n");
+    println!("0 | 1 | 2");
+    println!("---------");
+    println!("3 | 4 | 5");
+    println!("---------");
+    println!("6 | 7 | 8\n");
+    println!("Enter 'q' to quit the game\n");
+    println!("================================\n");
+}
+
 async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> Result<Vec<Blob>> {
     let blobs = client
         .blob_get_all(height, &[namespace.clone()])
@@ -64,7 +76,15 @@ fn display_board(moves: &Vec<Vec<u8>>) -> Option<char> {
 
     // Print board
     for i in 0..3 {
-        println!("{} {} {}", board[i * 3], board[i * 3 + 1], board[i * 3 + 2]);
+        println!(
+            "{} | {} | {}",
+            board[i * 3],
+            board[i * 3 + 1],
+            board[i * 3 + 2]
+        );
+        if i < 2 {
+            println!("---------");
+        }
     }
 
     // Check for winner
@@ -85,14 +105,16 @@ fn display_board(moves: &Vec<Vec<u8>>) -> Option<char> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 4 {
-        eprintln!("Usage: cargo run -- <namespace_plaintext> <start_height> <position(0-8)>");
+    if args.len() != 3 {
+        eprintln!("Usage: cargo run -- <namespace_plaintext> <start_height>");
         std::process::exit(1);
     }
 
+    // Show the board guide at startup
+    show_board_guide();
+
     let namespace_plaintext = &args[1];
     let start_height = args[2].parse::<u64>()?;
-    let position = args[3].parse::<u8>()?;
 
     let namespace_hex = hex::encode(namespace_plaintext);
     let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
@@ -101,30 +123,69 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to connect to Celestia node")?;
 
-    // Submit move
-    let result_height = submit_move(&client, &namespace, position).await?;
-    println!("Move submitted at height: {}", result_height);
+    let mut current_height = start_height;
+    let mut current_player = 'X';
 
-    // Wait a bit for ONLY the new block to be processed
-    sleep(Duration::from_secs(2)).await;
+    loop {
+        // Display current board state
+        let mut all_moves = Vec::new();
+        for height in start_height..=current_height {
+            if let Ok(blobs) = retrieve_blobs(&client, height, &namespace).await {
+                all_moves.extend(blobs.iter().map(|b| b.data.clone()));
+            }
+        }
 
-    // Get all moves from start_height with no delays in between
-    let mut all_moves = Vec::new();
-    for height in start_height..=result_height {
-        if let Ok(blobs) = retrieve_blobs(&client, height, &namespace).await {
-            all_moves.extend(blobs.iter().map(|b| b.data.clone()));
+        println!("\nCurrent board state:");
+        if let Some(game_result) = display_board(&all_moves) {
+            match game_result {
+                'D' => {
+                    println!("Game Over - It's a draw!");
+                    break;
+                }
+                winner => {
+                    println!("Game Over - Player {} has won!", winner);
+                    break;
+                }
+            }
+        }
+
+        // Get player move
+        println!("\nPlayer {}'s turn", current_player);
+        println!("Enter position (0-8) or 'q' to quit:");
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+
+        if input.trim().to_lowercase() == "q" {
+            println!("Game ended by player");
+            break;
+        }
+
+        let position = match input.trim().parse::<u8>() {
+            Ok(pos) if pos < 9 => pos,
+            _ => {
+                println!("Invalid input! Please enter a number between 0-8");
+                continue;
+            }
+        };
+
+        // Submit move
+        match submit_move(&client, &namespace, position).await {
+            Ok(height) => {
+                println!("Move submitted at height: {}", height);
+                current_height = height;
+                // Wait for block to be processed
+                sleep(Duration::from_secs(2)).await;
+                // Switch players
+                current_player = if current_player == 'X' { 'O' } else { 'X' };
+            }
+            Err(e) => {
+                println!("Error submitting move: {}", e);
+                continue;
+            }
         }
     }
 
-    println!("\nCurrent board state:");
-    if let Some(game_result) = display_board(&all_moves) {
-        match game_result {
-            'D' => println!("Game Over - It's a draw!"),
-            winner => println!("Game Over - Player {} has won!", winner),
-        }
-    } else {
-        println!("Game is still in progress...");
-    }
-
+    println!("Thanks for playing!");
     Ok(())
 }
