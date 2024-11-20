@@ -5,7 +5,6 @@ use std::env;
 use std::time::Duration;
 use tokio::time::sleep;
 
-// Add winning combinations
 const WINNING_COMBINATIONS: [[usize; 3]; 8] = [
     [0, 1, 2], // Top row
     [3, 4, 5], // Middle row
