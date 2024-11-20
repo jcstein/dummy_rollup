@@ -1,6 +1,6 @@
-# dummy_rollup
+# dummy_rollup - tictactoe
 
-This is a dummy rollup project to test the Celenium API.
+This is a Tic-tac-toe game implementation using the Celestia blockchain.
 
 ## Prerequisites
 
@@ -19,18 +19,25 @@ celestia light start --core.ip rpc-mocha.pops.one --p2p.network mocha --rpc.skip
 
 The project uses the following dependencies:
 
-- `anyhow`: For error handling.
-- `celestia_rpc`: For interacting with the Celestia node.
-- `celestia_types`: For handling Celestia-specific types like `Namespace` and `Blob`.
-- `rand`: For generating random data for the blobs.
-- `tokio`: For asynchronous runtime.
-- `ctrlc`: For handling `Ctrl+C` interrupts.
+- `anyhow`: For error handling
+- `celestia_rpc`: For interacting with the Celestia node
+- `celestia_types`: For handling Celestia-specific types like `Namespace` and `Blob`
+- `tokio`: For asynchronous runtime
+- `hex`: For namespace encoding/decoding
+
+## Game Rules
+
+The game follows standard Tic-tac-toe rules:
+- Players take turns placing X's and O's on a 3x3 grid
+- First player uses X, second player uses O
+- Three in a row (horizontally, vertically, or diagonally) wins
+- If the board fills up with no winner, it's a draw
 
 ## Usage
 
 ### Build
 
-To build the dummy_rollup:
+To build the game:
 
 ```shell
 cargo build
@@ -38,43 +45,53 @@ cargo build
 
 ### Run
 
-To run the dummy_rollup:
+To make a move in the game:
 
 ```shell
-cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>
+cargo run -- <namespace_plaintext> <start_height> <position>
 ```
 
 Where:
-- `<namespace_plaintext>`: The plaintext string that will be converted to a hexadecimal namespace.
-- `<number_of_blobs>`: The number of blobs to generate and submit in each batch.
-- `<blob_size_in_bytes>`: The size of each blob in bytes.
+- `<namespace_plaintext>`: The game identifier that will be converted to a hexadecimal namespace
+- `<start_height>`: The blockchain height where the game started
+- `<position>`: Position on the board (0-8) where you want to place your mark
 
-The program will continuously submit batches of blobs to the Celestia node every 5 seconds. To stop the submission, press `Ctrl+C`. The program will handle the shutdown gracefully.
+The board positions are numbered as follows:
+```
+0 1 2
+3 4 5
+6 7 8
+```
 
 #### Example
 
 ```shell
-cargo run -- junkdata 10 1000
+cargo run -- game1 2870188 4
 ```
 
-This command posts continuously to the "junkdata" namespace with 10 blobs of 1000 bytes each.
-
-If there are any issues with the submission, the program will print an error message and continue attempting to submit new batches.
+This command:
+- Joins/creates a game called "game1"
+- Looks for moves starting from height 2870188
+- Places a mark in the center position (4)
 
 #### Example output
 
-When running the example command, you should see output similar to the following:
+When running the command, you'll see output similar to:
 
 ```
-Starting continuous blob submission. Press Ctrl+C to stop.
-Submitting batches of 10 blobs, each 1000 bytes, with namespace 'junkdata'
-Batch submitted successfully!
-Result: 2870188
-...
+Move submitted at height: 2870190
+
+Current board state:
+. . .
+. X .
+. . .
+
+Game is still in progress...
 ```
 
-If there is an error, you will see:
+The board shows:
+- `.` for empty spaces
+- `X` for player 1's moves
+- `O` for player 2's moves
 
-```
-Error submitting batch: <error_message>
-```
+The game will indicate when someone wins or when it's a draw.

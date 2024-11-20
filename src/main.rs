@@ -1,12 +1,21 @@
 use anyhow::{Context, Result};
 use celestia_rpc::{BlobClient, Client};
 use celestia_types::{nmt::Namespace, AppVersion, Blob, TxConfig};
-use rand::RngCore;
 use std::env;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+
+// Add winning combinations
+const WINNING_COMBINATIONS: [[usize; 3]; 8] = [
+    [0, 1, 2], // Top row
+    [3, 4, 5], // Middle row
+    [6, 7, 8], // Bottom row
+    [0, 3, 6], // Left column
+    [1, 4, 7], // Middle column
+    [2, 5, 8], // Right column
+    [0, 4, 8], // Diagonal
+    [2, 4, 6], // Diagonal
+];
 
 async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> Result<Vec<Blob>> {
     let blobs = client
@@ -17,21 +26,74 @@ async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> 
     Ok(blobs)
 }
 
+async fn submit_move(client: &Client, namespace: &Namespace, position: u8) -> Result<u64> {
+    let blob = Blob::new(namespace.clone(), vec![position], AppVersion::V2)?;
+    Ok(client.blob_submit(&[blob], TxConfig::default()).await?)
+}
+
+// Check if a player has won
+fn check_winner(board: &[char; 9]) -> Option<char> {
+    for combo in WINNING_COMBINATIONS.iter() {
+        if board[combo[0]] != '.'
+            && board[combo[0]] == board[combo[1]]
+            && board[combo[1]] == board[combo[2]]
+        {
+            return Some(board[combo[0]]);
+        }
+    }
+    None
+}
+
+// Check if the board is full (draw)
+fn is_board_full(board: &[char; 9]) -> bool {
+    !board.contains(&'.')
+}
+
+// Display the board and check game status
+fn display_board(moves: &Vec<Vec<u8>>) -> Option<char> {
+    let mut board = ['.'; 9];
+
+    // Fill board with X's and O's alternating
+    for (i, move_data) in moves.iter().enumerate() {
+        if !move_data.is_empty() {
+            let position = move_data[0] as usize;
+            if position < 9 {
+                board[position] = if i % 2 == 0 { 'X' } else { 'O' };
+            }
+        }
+    }
+
+    // Print board
+    for i in 0..3 {
+        println!("{} {} {}", board[i * 3], board[i * 3 + 1], board[i * 3 + 2]);
+    }
+
+    // Check for winner
+    if let Some(winner) = check_winner(&board) {
+        println!("\nPlayer {} wins!", winner);
+        return Some(winner);
+    }
+
+    // Check for draw
+    if is_board_full(&board) {
+        println!("\nGame is a draw!");
+        return Some('D'); // 'D' for draw
+    }
+
+    None // Game is still ongoing
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 4 {
-        eprintln!(
-            "Usage: cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>"
-        );
+        eprintln!("Usage: cargo run -- <namespace_plaintext> <start_height> <position(0-8)>");
         std::process::exit(1);
     }
 
     let namespace_plaintext = &args[1];
-    let num_blobs = args[2]
-        .parse::<usize>()
-        .context("Invalid number of blobs")?;
-    let blob_size = args[3].parse::<usize>().context("Invalid blob size")?;
+    let start_height = args[2].parse::<u64>()?;
+    let position = args[3].parse::<u8>()?;
 
     let namespace_hex = hex::encode(namespace_plaintext);
     let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
@@ -40,96 +102,30 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to connect to Celestia node")?;
 
-    println!("Starting continuous blob submission. Press Ctrl+C to stop.");
-    println!(
-        "Submitting batches of {} blobs, each {} bytes, with namespace '{}'",
-        num_blobs, blob_size, namespace_plaintext
-    );
+    // Submit move
+    let result_height = submit_move(&client, &namespace, position).await?;
+    println!("Move submitted at height: {}", result_height);
 
-    // Set up Ctrl+C handler
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-        println!("\nShutting down gracefully...");
-    })
-    .expect("Error setting Ctrl-C handler");
+    // Wait a bit for ONLY the new block to be processed
+    sleep(Duration::from_secs(2)).await;
 
-    while running.load(Ordering::SeqCst) {
-        let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
-        let submitted_data: Vec<Vec<u8>> = blobs.iter().map(|b| b.data.clone()).collect();
-
-        match client.blob_submit(&blobs, TxConfig::default()).await {
-            Ok(result_height) => {
-                println!("Batch submitted successfully!");
-                println!("Result height: {}", result_height);
-
-                // Wait a bit for the block to be processed
-                sleep(Duration::from_secs(2)).await;
-
-                println!("Checking height {}...", result_height);
-                match retrieve_blobs(&client, result_height, &namespace).await {
-                    Ok(retrieved_blobs) => {
-                        if !retrieved_blobs.is_empty() {
-                            println!(
-                                "Found {} blobs at height {}",
-                                retrieved_blobs.len(),
-                                result_height
-                            );
-
-                            // Verify the retrieved blobs match what we submitted
-                            let retrieved_data: Vec<Vec<u8>> = retrieved_blobs
-                                .iter()
-                                .map(|b| b.data.clone())
-                                .collect();
-
-                            for (i, (submitted, retrieved)) in submitted_data
-                                .iter()
-                                .zip(retrieved_data.iter())
-                                .enumerate()
-                            {
-                                if submitted == retrieved {
-                                    println!("✅ Blob {} verified successfully", i);
-                                } else {
-                                    println!("❌ Blob {} verification failed", i);
-                                }
-                            }
-                        } else {
-                            println!("No blobs found at height {}", result_height);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error retrieving blobs at height {}: {:?}", result_height, e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error submitting batch: {:?}", e);
-            }
+    // Get all moves from start_height with no delays in between
+    let mut all_moves = Vec::new();
+    for height in start_height..=result_height {
+        if let Ok(blobs) = retrieve_blobs(&client, height, &namespace).await {
+            all_moves.extend(blobs.iter().map(|b| b.data.clone()));
         }
-
-        sleep(Duration::from_secs(5)).await;
     }
 
-    println!("Blob submission stopped.");
+    println!("\nCurrent board state:");
+    if let Some(game_result) = display_board(&all_moves) {
+        match game_result {
+            'D' => println!("Game Over - It's a draw!"),
+            winner => println!("Game Over - Player {} has won!", winner),
+        }
+    } else {
+        println!("Game is still in progress...");
+    }
+
     Ok(())
-}
-
-fn generate_random_blobs(
-    num_blobs: usize,
-    blob_size: usize,
-    namespace: &Namespace,
-) -> Result<Vec<Blob>> {
-    let mut rng = rand::thread_rng();
-    let mut blobs = Vec::with_capacity(num_blobs);
-
-    for _ in 0..num_blobs {
-        let mut random_data = vec![0u8; blob_size];
-        rng.fill_bytes(&mut random_data);
-        let blob = Blob::new(namespace.clone(), random_data, AppVersion::V2)
-            .map_err(|e| anyhow::anyhow!("Failed to create blob: {}", e))?;
-        blobs.push(blob);
-    }
-
-    Ok(blobs)
 }
