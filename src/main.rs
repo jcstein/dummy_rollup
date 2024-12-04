@@ -33,10 +33,22 @@ async fn main() -> Result<()> {
         .context("Invalid number of blobs")?;
     let blob_size = args[3].parse::<usize>().context("Invalid blob size")?;
 
+    // Get auth token from environment
+    let token = match env::var("CELESTIA_NODE_AUTH_TOKEN") {
+        Ok(token) => Some(token),
+        Err(_) => {
+            println!("Note: CELESTIA_NODE_AUTH_TOKEN not set. Make sure to either:");
+            println!("  1. Set CELESTIA_NODE_AUTH_TOKEN environment variable, or");
+            println!("  2. Use --rpc.skip-auth when starting your Celestia node");
+            None
+        }
+    };
+
     let namespace_hex = hex::encode(namespace_plaintext);
     let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
 
-    let client = Client::new("http://localhost:26658", None)
+    // Updated client initialization with auth token
+    let client = Client::new("ws://localhost:26658", token.as_deref())
         .await
         .context("Failed to connect to Celestia node")?;
 
@@ -46,7 +58,6 @@ async fn main() -> Result<()> {
         num_blobs, blob_size, namespace_plaintext
     );
 
-    // Set up Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -64,7 +75,6 @@ async fn main() -> Result<()> {
                 println!("Batch submitted successfully!");
                 println!("Result height: {}", result_height);
 
-                // Wait a bit for the block to be processed
                 sleep(Duration::from_secs(2)).await;
 
                 println!("Checking height {}...", result_height);
@@ -77,16 +87,11 @@ async fn main() -> Result<()> {
                                 result_height
                             );
 
-                            // Verify the retrieved blobs match what we submitted
-                            let retrieved_data: Vec<Vec<u8>> = retrieved_blobs
-                                .iter()
-                                .map(|b| b.data.clone())
-                                .collect();
+                            let retrieved_data: Vec<Vec<u8>> =
+                                retrieved_blobs.iter().map(|b| b.data.clone()).collect();
 
-                            for (i, (submitted, retrieved)) in submitted_data
-                                .iter()
-                                .zip(retrieved_data.iter())
-                                .enumerate()
+                            for (i, (submitted, retrieved)) in
+                                submitted_data.iter().zip(retrieved_data.iter()).enumerate()
                             {
                                 if submitted == retrieved {
                                     println!("✅ Blob {} verified successfully", i);
@@ -99,7 +104,12 @@ async fn main() -> Result<()> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error retrieving blobs at height {}: {:?}", result_height, e);
+                        eprintln!("Error submitting batch: {:?}", e);
+                        eprintln!("\nAuthentication Error: Please ensure either:");
+                        eprintln!(
+                            "1. CELESTIA_NODE_AUTH_TOKEN environment variable is set correctly, or"
+                        );
+                        eprintln!("2. Your Celestia node was started with --rpc.skip-auth flag");
                     }
                 }
             }
