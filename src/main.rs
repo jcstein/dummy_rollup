@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
         num_blobs, blob_size, namespace_plaintext
     );
 
+    // Set up Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -75,6 +76,7 @@ async fn main() -> Result<()> {
                 println!("Batch submitted successfully!");
                 println!("Result height: {}", result_height);
 
+                // Wait a bit for the block to be processed
                 sleep(Duration::from_secs(2)).await;
 
                 println!("Checking height {}...", result_height);
@@ -87,6 +89,7 @@ async fn main() -> Result<()> {
                                 result_height
                             );
 
+                            // Verify the retrieved blobs match what we submitted
                             let retrieved_data: Vec<Vec<u8>> =
                                 retrieved_blobs.iter().map(|b| b.data.clone()).collect();
 
