@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use celestia_rpc::{BlobClient, Client};
-use celestia_types::{nmt::Namespace, AppVersion, Blob, TxConfig};
+use celestia_types::{nmt::Namespace, AppVersion, Blob};
+use celestia_rpc::TxConfig;
 use rand::RngCore;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::time::{sleep, Duration};
 
 /// Retrieves blobs from the Celestia network for a specific height and namespace
 /// Returns a Result containing a vector of retrieved blobs or an error
@@ -82,48 +84,65 @@ async fn main() -> Result<()> {
                 println!("Batch submitted successfully!");
                 println!("Result height: {}", result_height);
 
+                // Wait for a few blocks to ensure the transaction is processed
+                sleep(Duration::from_secs(6)).await;
+
                 println!("Checking height {}...", result_height);
-                // Verify submitted blobs by retrieving them
-                match retrieve_blobs(&client, result_height, &namespace).await {
-                    Ok(retrieved_blobs) => {
-                        if !retrieved_blobs.is_empty() {
-                            println!(
-                                "Found {} blobs at height {}",
-                                retrieved_blobs.len(),
-                                result_height
-                            );
+                // Add retry logic for verification
+                let mut retry_count = 0;
+                let max_retries = 3;
+                
+                while retry_count < max_retries {
+                    match retrieve_blobs(&client, result_height, &namespace).await {
+                        Ok(retrieved_blobs) => {
+                            if !retrieved_blobs.is_empty() {
+                                println!(
+                                    "Found {} blobs at height {}",
+                                    retrieved_blobs.len(),
+                                    result_height
+                                );
 
-                            // Verify blob contents match what was submitted
-                            let retrieved_data: Vec<Vec<u8>> =
-                                retrieved_blobs.iter().map(|b| b.data.clone()).collect();
+                                let retrieved_data: Vec<Vec<u8>> =
+                                    retrieved_blobs.iter().map(|b| b.data.clone()).collect();
 
-                            for (i, (submitted, retrieved)) in
-                                submitted_data.iter().zip(retrieved_data.iter()).enumerate()
-                            {
-                                if submitted == retrieved {
-                                    println!("✅ Blob {} verified successfully", i);
-                                } else {
-                                    println!("❌ Blob {} verification failed", i);
+                                let mut all_verified = true;
+                                for (i, submitted) in submitted_data.iter().enumerate() {
+                                    if retrieved_data.iter().any(|retrieved| retrieved == submitted) {
+                                        println!("✅ Blob {} verified successfully", i);
+                                    } else {
+                                        println!("❌ Blob {} verification failed", i);
+                                        all_verified = false;
+                                    }
+                                }
+
+                                if all_verified {
+                                    break;
                                 }
                             }
-                        } else {
-                            println!("No blobs found at height {}", result_height);
+                            retry_count += 1;
+                            if retry_count < max_retries {
+                                sleep(Duration::from_secs(3)).await;
+                            }
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("Error submitting batch: {:?}", e);
-                        eprintln!("\nAuthentication Error: Please ensure either:");
-                        eprintln!(
-                            "1. CELESTIA_NODE_AUTH_TOKEN environment variable is set correctly, or"
-                        );
-                        eprintln!("2. Your Celestia node was started with --rpc.skip-auth flag");
+                        Err(e) => {
+                            eprintln!("Error verifying batch: {:?}", e);
+                            retry_count += 1;
+                            if retry_count < max_retries {
+                                sleep(Duration::from_secs(3)).await;
+                            }
+                        }
                     }
                 }
             }
             Err(e) => {
                 eprintln!("Error submitting batch: {:?}", e);
+                // Add delay before retrying submission
+                sleep(Duration::from_secs(3)).await;
             }
         }
+        
+        // Add delay between batch submissions
+        sleep(Duration::from_secs(3)).await;
     }
 
     println!("Blob submission stopped.");
