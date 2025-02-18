@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use chrono::Local;
+use hex;
 
 /// Helper function to get current timestamp for logging
 fn log_with_timestamp(message: &str) {
@@ -18,13 +19,13 @@ fn log_with_timestamp(message: &str) {
 /// Retrieves blobs from the Celestia network for a specific height and namespace
 /// Returns a Result containing a vector of retrieved blobs or an error
 async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> Result<Vec<Blob>> {
-    log_with_timestamp(&format!("Retrieving blobs for height {}", height));
+    log_with_timestamp(&format!("Retrieving blobs at height {} for namespace '{}'", height, hex::encode(&namespace.as_bytes())));
     let blobs = client
         .blob_get_all(height, &[namespace.clone()])
         .await
         .map_err(|e| anyhow::anyhow!("Failed to retrieve blobs: {}", e))?
         .unwrap_or_default();
-    log_with_timestamp(&format!("Retrieved {} blobs", blobs.len()));
+    log_with_timestamp(&format!("Retrieved {} blobs from namespace '{}'", blobs.len(), hex::encode(&namespace.as_bytes())));
     Ok(blobs)
 }
 
@@ -83,8 +84,8 @@ async fn main() -> Result<()> {
 
     log_with_timestamp("Starting continuous blob submission. Press Ctrl+C to stop.");
     log_with_timestamp(&format!(
-        "Submitting batches of {} blobs, each {} bytes, with namespace '{}'",
-        num_blobs, blob_size, namespace_plaintext
+        "Submitting batches of {} blobs, each {} bytes, with namespace '{}' (hex: 0x{})",
+        num_blobs, blob_size, namespace_plaintext, namespace_hex
     ));
 
     // Set up graceful shutdown handler for Ctrl+C
@@ -100,25 +101,27 @@ async fn main() -> Result<()> {
     let mut batch_counter = 0;
     while running.load(Ordering::SeqCst) {
         batch_counter += 1;
-        log_with_timestamp(&format!("Starting batch #{} submission", batch_counter));
+        log_with_timestamp(&format!("Starting batch #{} submission to namespace '{}'", batch_counter, namespace_plaintext));
         
         // Generate and submit random blobs
-        log_with_timestamp("Generating random blobs");
+        log_with_timestamp(&format!("Generating random blobs for namespace '{}'", namespace_plaintext));
         let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
         let submitted_data: Vec<Vec<u8>> = blobs.iter().map(|b| b.data.clone()).collect();
-        log_with_timestamp(&format!("Generated {} random blobs", blobs.len()));
+        log_with_timestamp(&format!("Generated {} random blobs for namespace '{}'", blobs.len(), namespace_plaintext));
 
         // Attempt to submit blobs to the network
-        log_with_timestamp("Submitting blobs to network");
+        log_with_timestamp(&format!("Submitting blobs to network for namespace '{}'", namespace_plaintext));
         match client.blob_submit(&blobs, TxConfig::default()).await {
             Ok(result_height) => {
-                log_with_timestamp(&format!("Batch #{} submitted successfully at height {}", batch_counter, result_height));
+                log_with_timestamp(&format!("Batch #{} submitted successfully at height {} for namespace '{}'", 
+                    batch_counter, result_height, namespace_plaintext));
 
                 // Wait for a few blocks to ensure the transaction is processed
                 log_with_timestamp("Waiting for transaction processing");
                 sleep(Duration::from_secs(6)).await;
 
-                log_with_timestamp(&format!("Verifying submission at height {}", result_height));
+                log_with_timestamp(&format!("Verifying submission at height {} for namespace '{}'", 
+                    result_height, namespace_plaintext));
                 // Add retry logic for verification
                 let mut retry_count = 0;
                 let max_retries = 3;
@@ -129,9 +132,10 @@ async fn main() -> Result<()> {
                         Ok(retrieved_blobs) => {
                             if !retrieved_blobs.is_empty() {
                                 log_with_timestamp(&format!(
-                                    "Found {} blobs at height {}",
+                                    "Found {} blobs at height {} for namespace '{}'",
                                     retrieved_blobs.len(),
-                                    result_height
+                                    result_height,
+                                    namespace_plaintext
                                 ));
 
                                 let retrieved_data: Vec<Vec<u8>> =
@@ -140,29 +144,29 @@ async fn main() -> Result<()> {
                                 let mut all_verified = true;
                                 for (i, submitted) in submitted_data.iter().enumerate() {
                                     if retrieved_data.iter().any(|retrieved| retrieved == submitted) {
-                                        log_with_timestamp(&format!("✅ Blob {} verified successfully", i));
+                                        log_with_timestamp(&format!("✅ Blob {} verified successfully for namespace '{}'", i, namespace_plaintext));
                                     } else {
-                                        log_with_timestamp(&format!("❌ Blob {} verification failed", i));
+                                        log_with_timestamp(&format!("❌ Blob {} verification failed for namespace '{}'", i, namespace_plaintext));
                                         all_verified = false;
                                     }
                                 }
 
                                 if all_verified {
-                                    log_with_timestamp(&format!("Batch #{} fully verified", batch_counter));
+                                    log_with_timestamp(&format!("Batch #{} fully verified for namespace '{}'", batch_counter, namespace_plaintext));
                                     break;
                                 }
                             }
                             retry_count += 1;
                             if retry_count < max_retries {
-                                log_with_timestamp(&format!("Verification incomplete, retrying in 3 seconds"));
+                                log_with_timestamp(&format!("Verification incomplete, retrying in 3 seconds for namespace '{}'", namespace_plaintext));
                                 sleep(Duration::from_secs(3)).await;
                             }
                         }
                         Err(e) => {
-                            log_with_timestamp(&format!("Error verifying batch: {:?}", e));
+                            log_with_timestamp(&format!("Error verifying batch: {:?} for namespace '{}'", e, namespace_plaintext));
                             retry_count += 1;
                             if retry_count < max_retries {
-                                log_with_timestamp("Retrying verification in 3 seconds");
+                                log_with_timestamp("Retrying verification in 3 seconds for namespace '{}'", namespace_plaintext);
                                 sleep(Duration::from_secs(3)).await;
                             }
                         }
@@ -170,17 +174,17 @@ async fn main() -> Result<()> {
                 }
             }
             Err(e) => {
-                log_with_timestamp(&format!("Error submitting batch #{}: {:?}", batch_counter, e));
-                log_with_timestamp("Retrying submission in 3 seconds");
+                log_with_timestamp(&format!("Error submitting batch #{}: {:?} for namespace '{}'", batch_counter, e, namespace_plaintext));
+                log_with_timestamp("Retrying submission in 3 seconds for namespace '{}'", namespace_plaintext);
                 sleep(Duration::from_secs(3)).await;
             }
         }
         
-        log_with_timestamp("Waiting before next batch submission");
+        log_with_timestamp("Waiting before next batch submission for namespace '{}'", namespace_plaintext);
         sleep(Duration::from_secs(3)).await;
     }
 
-    log_with_timestamp("Blob submission stopped gracefully");
+    log_with_timestamp("Blob submission stopped gracefully for namespace '{}'", namespace_plaintext);
     Ok(())
 }
 
