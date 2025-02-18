@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     // Create namespace from plaintext input
     let namespace_hex = hex::encode(namespace_plaintext);
     let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
-    log_with_timestamp(&format!("Created namespace from '{}'", namespace_plaintext));
+    log_with_timestamp(&format!("Created namespace '{}' (hex: 0x{})", namespace_plaintext, namespace_hex));
 
     // Initialize Celestia client with WebSocket connection
     log_with_timestamp("Connecting to Celestia node at ws://localhost:26658");
