@@ -12,9 +12,8 @@ This is a dummy rollup project to test posting and retrieving data from Celestia
 To start a Celestia light node, use the following command:
 
 ```shell
-celestia light start --core.ip rpc-mocha.pops.one --p2p.network mocha --rpc.skip-auth
+celestia light start --core.ip rpc-mocha.pops.one --core.port 9090 --p2p.network mocha --rpc.skip-auth
 ```
-
 ## Dependencies
 
 The project uses the following dependencies:
