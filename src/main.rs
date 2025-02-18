@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
                             log_with_timestamp(&format!("Error verifying batch: {:?} for namespace '{}'", e, namespace_plaintext));
                             retry_count += 1;
                             if retry_count < max_retries {
-                                log_with_timestamp("Retrying verification in 3 seconds for namespace '{}'", namespace_plaintext);
+                                log_with_timestamp(&format!("Retrying verification in 3 seconds for namespace '{}'", namespace_plaintext));
                                 sleep(Duration::from_secs(3)).await;
                             }
                         }
@@ -175,16 +175,16 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 log_with_timestamp(&format!("Error submitting batch #{}: {:?} for namespace '{}'", batch_counter, e, namespace_plaintext));
-                log_with_timestamp("Retrying submission in 3 seconds for namespace '{}'", namespace_plaintext);
+                log_with_timestamp(&format!("Retrying submission in 3 seconds for namespace '{}'", namespace_plaintext));
                 sleep(Duration::from_secs(3)).await;
             }
         }
         
-        log_with_timestamp("Waiting before next batch submission for namespace '{}'", namespace_plaintext);
+        log_with_timestamp(&format!("Waiting before next batch submission for namespace '{}'", namespace_plaintext));
         sleep(Duration::from_secs(3)).await;
     }
 
-    log_with_timestamp("Blob submission stopped gracefully for namespace '{}'", namespace_plaintext);
+    log_with_timestamp(&format!("Blob submission stopped gracefully for namespace '{}'", namespace_plaintext));
     Ok(())
 }
 
