@@ -18,7 +18,7 @@ fn log_with_timestamp(message: &str) {
 /// Retrieves blobs from the Celestia network for a specific height and namespace
 /// Returns a Result containing a vector of retrieved blobs or an error
 async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> Result<Vec<Blob>> {
-    log_with_timestamp(&format!("Retrieving blobs for height {} and namespace {:?}", height, namespace));
+    log_with_timestamp(&format!("Retrieving blobs for height {}", height));
     let blobs = client
         .blob_get_all(height, &[namespace.clone()])
         .await
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     // Create namespace from plaintext input
     let namespace_hex = hex::encode(namespace_plaintext);
     let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
-    log_with_timestamp(&format!("Created namespace: {:?}", namespace));
+    log_with_timestamp(&format!("Created namespace from '{}'", namespace_plaintext));
 
     // Initialize Celestia client with WebSocket connection
     log_with_timestamp("Connecting to Celestia node at ws://localhost:26658");
