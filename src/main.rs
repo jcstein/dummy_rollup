@@ -71,8 +71,16 @@ async fn main() -> Result<()> {
     };
 
     // Create namespace from plaintext input
-    let namespace_hex = hex::encode(namespace_plaintext);
-    let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
+    let namespace = if namespace_plaintext.len() == 58 && namespace_plaintext.chars().all(|c| c.is_ascii_hexdigit()) {
+        // Input is already a hex string
+        Namespace::new_v0(&hex::decode(namespace_plaintext)?)?
+    } else {
+        // Input is plaintext, encode it
+        let namespace_hex = hex::encode(namespace_plaintext);
+        Namespace::new_v0(&hex::decode(&namespace_hex)?)?
+    };
+    
+    let namespace_hex = hex::encode(&namespace.as_bytes());
     log_with_timestamp(&format!("Created namespace '{}' (hex: 0x{})", namespace_plaintext, namespace_hex));
 
     // Initialize Celestia client with WebSocket connection
