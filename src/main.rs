@@ -194,7 +194,7 @@ fn generate_random_blobs(
     let mut blobs = Vec::with_capacity(num_blobs);
 
     // Generate random data for each blob
-    for i in 0..num_blobs {
+    for _ in 0..num_blobs {
         let mut random_data = vec![0u8; blob_size];
         rng.fill_bytes(&mut random_data);
         let blob = Blob::new(namespace.clone(), random_data, AppVersion::V2)
