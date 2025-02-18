@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use celestia_rpc::{BlobClient, Client};
+use celestia_rpc::{BlobClient, Client, HeaderClient};
 use celestia_types::{nmt::Namespace, AppVersion, Blob};
 use celestia_rpc::TxConfig;
 use rand::RngCore;
@@ -9,6 +9,50 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use chrono::Local;
 use hex;
+use chess::{Game, ChessMove, Board, MoveGen, Color, Square, Piece};
+use serde::{Serialize, Deserialize};
+use std::str::FromStr;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GameState {
+    fen: String,
+    last_move: Option<String>,
+    game_over: bool,
+    winner: Option<String>,
+}
+
+impl GameState {
+    fn new() -> Self {
+        GameState {
+            fen: Board::default().to_string(),
+            last_move: None,
+            game_over: false,
+            winner: None,
+        }
+    }
+
+    fn from_game(game: &Game, last_move: Option<String>) -> Self {
+        let winner = if game.result().is_some() {
+            match game.result().unwrap() {
+                chess::GameResult::WhiteCheckmates => Some("White".to_string()),
+                chess::GameResult::BlackCheckmates => Some("Black".to_string()),
+                chess::GameResult::WhiteResigns => Some("Black".to_string()),
+                chess::GameResult::BlackResigns => Some("White".to_string()),
+                chess::GameResult::Stalemate => Some("Draw".to_string()),
+                _ => Some("Draw".to_string()),
+            }
+        } else {
+            None
+        };
+
+        GameState {
+            fen: game.current_position().to_string(),
+            last_move,
+            game_over: game.result().is_some(),
+            winner,
+        }
+    }
+}
 
 /// Helper function to get current timestamp for logging
 fn log_with_timestamp(message: &str) {
@@ -16,172 +60,168 @@ fn log_with_timestamp(message: &str) {
     println!("[{}] {}", timestamp, message);
 }
 
-/// Retrieves blobs from the Celestia network for a specific height and namespace
-/// Returns a Result containing a vector of retrieved blobs or an error
-async fn retrieve_blobs(client: &Client, height: u64, namespace: &Namespace) -> Result<Vec<Blob>> {
-    log_with_timestamp(&format!("Retrieving blobs at height {}", height));
-    let blobs = client
-        .blob_get_all(height, &[namespace.clone()])
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to retrieve blobs: {}", e))?
-        .unwrap_or_default();
-    log_with_timestamp(&format!("Retrieved {} blobs", blobs.len()));
-    Ok(blobs)
+/// Parse a move in UCI format (e.g., "e2e4")
+fn parse_uci(move_str: &str) -> Option<ChessMove> {
+    if move_str.len() != 4 && move_str.len() != 5 {
+        return None;
+    }
+
+    let from = Square::from_str(&move_str[0..2]).ok()?;
+    let to = Square::from_str(&move_str[2..4]).ok()?;
+    
+    let promotion = if move_str.len() == 5 {
+        match move_str.chars().last()? {
+            'q' => Some(Piece::Queen),
+            'r' => Some(Piece::Rook),
+            'b' => Some(Piece::Bishop),
+            'n' => Some(Piece::Knight),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    Some(ChessMove::new(from, to, promotion))
+}
+
+/// Create a valid 8-byte namespace from a string
+fn create_namespace(input: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8);
+    for (i, chunk) in input.as_bytes().chunks(2).enumerate() {
+        if i >= 4 {
+            break;
+        }
+        let mut value = chunk[0] as u16;
+        if chunk.len() > 1 {
+            value = (value << 8) | (chunk[1] as u16);
+        }
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    while bytes.len() < 8 {
+        bytes.push(0);
+    }
+    bytes
+}
+
+/// Retrieves the latest game state from the Celestia network
+async fn get_latest_game_state(client: &Client, namespace: &Namespace, height: u64) -> Result<Option<GameState>> {
+    // Look back through the last 10 blocks
+    for h in (height.saturating_sub(10)..=height).rev() {
+        log_with_timestamp(&format!("Retrieving game state at height {}", h));
+        let blobs = client
+            .blob_get_all(h, &[namespace.clone()])
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to retrieve blobs: {}", e))?
+            .unwrap_or_default();
+
+        if !blobs.is_empty() {
+            // Get the latest blob
+            let latest_blob = blobs.last().unwrap();
+            let state: GameState = serde_json::from_slice(&latest_blob.data)
+                .map_err(|e| anyhow::anyhow!("Failed to deserialize game state: {}", e))?;
+            
+            return Ok(Some(state));
+        }
+    }
+    
+    Ok(None)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    log_with_timestamp("Starting rollup application");
+    log_with_timestamp("Starting chess rollup");
     
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
-    if args.len() != 4 {
+    if args.len() != 3 {
         log_with_timestamp("Error: Invalid number of arguments");
         eprintln!(
-            "Usage: cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>"
+            "Usage: cargo run -- <namespace_id> <move_in_uci_format>"
         );
+        eprintln!("Example: cargo run -- chess e2e4");
+        eprintln!("Use 'new' as move to start a new game");
         std::process::exit(1);
     }
 
-    // Extract and parse command line arguments
-    let namespace_plaintext = &args[1];
-    let num_blobs = args[2]
-        .parse::<usize>()
-        .context("Invalid number of blobs")?;
-    let blob_size = args[3].parse::<usize>().context("Invalid blob size")?;
+    let namespace_id = &args[1];
+    let chess_move = &args[2];
 
-    log_with_timestamp(&format!(
-        "Configuration - Namespace: {}, Number of blobs: {}, Blob size: {} bytes",
-        namespace_plaintext, num_blobs, blob_size
-    ));
+    // Create namespace
+    let namespace_bytes = create_namespace(namespace_id);
+    let namespace = Namespace::new_v0(&namespace_bytes)?;
+    log_with_timestamp(&format!("Using namespace '{}'", namespace_id));
 
-    // Check for authentication token in environment variables
-    let token = match env::var("CELESTIA_NODE_AUTH_TOKEN") {
-        Ok(token) => {
-            log_with_timestamp("Found CELESTIA_NODE_AUTH_TOKEN in environment");
-            Some(token)
-        },
-        Err(_) => {
-            log_with_timestamp("Warning: CELESTIA_NODE_AUTH_TOKEN not set");
-            println!("Note: CELESTIA_NODE_AUTH_TOKEN not set. Make sure to either:");
-            println!("  1. Set CELESTIA_NODE_AUTH_TOKEN environment variable, or");
-            println!("  2. Use --rpc.skip-auth when starting your Celestia node");
-            None
-        }
-    };
-
-    // Create namespace from plaintext input
-    let namespace_hex = hex::encode(namespace_plaintext);
-    let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
-    log_with_timestamp(&format!("Created namespace '{}'", namespace_plaintext));
-
-    // Initialize Celestia client with WebSocket connection
+    // Initialize Celestia client
     log_with_timestamp("Connecting to Celestia node at ws://localhost:26658");
-    let client = Client::new("ws://localhost:26658", token.as_deref())
+    let client = Client::new("ws://localhost:26658", None)
         .await
         .context("Failed to connect to Celestia node")?;
     log_with_timestamp("Successfully connected to Celestia node");
 
-    log_with_timestamp("Starting continuous blob submission. Press Ctrl+C to stop.");
-    log_with_timestamp(&format!(
-        "Submitting batches of {} blobs, each {} bytes, with namespace '{}'",
-        num_blobs, blob_size, namespace_plaintext
-    ));
-
-    // Set up graceful shutdown handler for Ctrl+C
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-        log_with_timestamp("Received shutdown signal, preparing to stop...");
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    // Main submission loop
-    let mut batch_counter = 0;
-    while running.load(Ordering::SeqCst) {
-        batch_counter += 1;
-        log_with_timestamp(&format!("Starting batch #{} submission to namespace '{}'", batch_counter, namespace_plaintext));
-        
-        // Generate and submit random blobs
-        log_with_timestamp(&format!("Generating random blobs for namespace '{}'", namespace_plaintext));
-        let blobs = generate_random_blobs(num_blobs, blob_size, &namespace)?;
-        let submitted_data: Vec<Vec<u8>> = blobs.iter().map(|b| b.data.clone()).collect();
-        log_with_timestamp(&format!("Generated {} random blobs", blobs.len()));
-
-        // Attempt to submit blobs to the network
-        log_with_timestamp("Submitting blobs to network");
-        match client.blob_submit(&blobs, TxConfig::default()).await {
-            Ok(result_height) => {
-                log_with_timestamp(&format!("Batch #{} submitted successfully at height {}", batch_counter, result_height));
-
-                // Wait for a few blocks to ensure the transaction is processed
-                log_with_timestamp("Waiting for transaction processing");
-                sleep(Duration::from_secs(6)).await;
-
-                log_with_timestamp(&format!("Verifying submission at height {}", result_height));
-                // Add retry logic for verification
-                let mut retry_count = 0;
-                let max_retries = 3;
-                
-                while retry_count < max_retries {
-                    log_with_timestamp(&format!("Verification attempt {} of {}", retry_count + 1, max_retries));
-                    match retrieve_blobs(&client, result_height, &namespace).await {
-                        Ok(retrieved_blobs) => {
-                            if !retrieved_blobs.is_empty() {
-                                log_with_timestamp(&format!(
-                                    "Found {} blobs at height {}",
-                                    retrieved_blobs.len(),
-                                    result_height
-                                ));
-
-                                let retrieved_data: Vec<Vec<u8>> =
-                                    retrieved_blobs.iter().map(|b| b.data.clone()).collect();
-
-                                let mut all_verified = true;
-                                for (i, submitted) in submitted_data.iter().enumerate() {
-                                    if retrieved_data.iter().any(|retrieved| retrieved == submitted) {
-                                        log_with_timestamp(&format!("✅ Blob {} verified successfully", i));
-                                    } else {
-                                        log_with_timestamp(&format!("❌ Blob {} verification failed", i));
-                                        all_verified = false;
-                                    }
-                                }
-
-                                if all_verified {
-                                    log_with_timestamp(&format!("Batch #{} fully verified", batch_counter));
-                                    break;
-                                }
-                            }
-                            retry_count += 1;
-                            if retry_count < max_retries {
-                                log_with_timestamp("Verification incomplete, retrying in 3 seconds");
-                                sleep(Duration::from_secs(3)).await;
-                            }
-                        }
-                        Err(e) => {
-                            log_with_timestamp(&format!("Error verifying batch: {:?}", e));
-                            retry_count += 1;
-                            if retry_count < max_retries {
-                                log_with_timestamp("Retrying verification in 3 seconds");
-                                sleep(Duration::from_secs(3)).await;
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                log_with_timestamp(&format!("Error submitting batch #{}: {:?}", batch_counter, e));
-                log_with_timestamp("Retrying submission in 3 seconds");
-                sleep(Duration::from_secs(3)).await;
-            }
+    // Get current height
+    let header = client.header_network_head().await?;
+    let height: u64 = header.height().into();
+    
+    // Get current game state
+    let mut game = Game::new();
+    let current_state = get_latest_game_state(&client, &namespace, height).await?;
+    
+    if let Some(state) = current_state {
+        // Load the existing game state
+        game = Game::from_str(&state.fen).map_err(|e| anyhow::anyhow!("Invalid FEN string: {}", e))?;
+        log_with_timestamp("Loaded existing game state");
+        log_with_timestamp(&format!("Current position:\n{}", game.current_position()));
+        if let Some(last_move) = state.last_move {
+            log_with_timestamp(&format!("Last move: {}", last_move));
         }
-        
-        log_with_timestamp("Waiting before next batch submission");
-        sleep(Duration::from_secs(3)).await;
+    } else {
+        log_with_timestamp("No existing game found, starting new game");
     }
 
-    log_with_timestamp("Blob submission stopped gracefully");
+    // Handle the move
+    if chess_move == "new" {
+        game = Game::new();
+        log_with_timestamp("Started new game");
+    } else {
+        // Parse and validate the move
+        let chess_move = ChessMove::from_san(&game.current_position(), chess_move)
+            .or_else(|_| parse_uci(chess_move).ok_or_else(|| anyhow::anyhow!("Invalid move format")))
+            .map_err(|_| anyhow::anyhow!("Invalid move format. Use UCI (e.g., e2e4) or SAN (e.g., Nf3)"))?;
+
+        // Verify move is legal
+        let legal_moves: Vec<ChessMove> = MoveGen::new_legal(&game.current_position()).collect();
+        if !legal_moves.contains(&chess_move) {
+            return Err(anyhow::anyhow!("Illegal move"));
+        }
+
+        // Make the move
+        game.make_move(chess_move);
+        log_with_timestamp(&format!("Move made: {}", chess_move));
+    }
+
+    // Create new game state
+    let new_state = GameState::from_game(&game, Some(chess_move.to_string()));
+    let state_json = serde_json::to_vec(&new_state)?;
+
+    // Submit the new state
+    log_with_timestamp("Submitting new game state");
+    let blob = Blob::new(namespace.clone(), state_json, AppVersion::V2)?;
+    let result_height = client.blob_submit(&[blob], TxConfig::default()).await?;
+    log_with_timestamp(&format!("Game state submitted at height {}", result_height));
+
+    // Print current board state
+    log_with_timestamp(&format!("Current position:\n{}", game.current_position()));
+    
+    // Check game status
+    if new_state.game_over {
+        match new_state.winner {
+            Some(ref winner) => log_with_timestamp(&format!("Game Over! Winner: {}", winner)),
+            None => log_with_timestamp("Game Over! It's a draw!"),
+        }
+    } else {
+        log_with_timestamp(&format!("Next move: {}", if game.side_to_move() == Color::White { "White" } else { "Black" }));
+    }
+
     Ok(())
 }
 

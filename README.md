@@ -1,91 +1,166 @@
 # dummy_rollup
 
-This is a dummy rollup project to test posting and retrieving data from Celestia.
+This is a chess rollup project that uses Celestia for move storage and game state management, with a web-based frontend for interactive gameplay.
 
 ## Prerequisites
 
 - Rust
 - Celestia light node running
+- Trunk (for frontend development)
+  ```shell
+  cargo install trunk
+  ```
 
 ### Setting up Celestia light node
 
 To start a Celestia light node, use the following command:
 
 ```shell
-celestia light start --core.ip rpc-mocha.pops.one --core.port 9090 --p2p.network mocha --rpc.skip-auth
+celestia light start --core.ip rpc-mocha.pops.one --core.port 9090--p2p.network mocha --rpc.skip-auth
 ```
+
 ## Dependencies
 
 The project uses the following dependencies:
 
-- `anyhow`: For error handling.
-- [`celestia_rpc`](https://crates.io/crates/celestia-rpc): For interacting with the Celestia node.
-- [`celestia_types`](https://crates.io/crates/celestia-types): For handling Celestia-specific types like `Namespace` and `Blob`.
-- `rand`: For generating random data for the blobs.
-- `tokio`: For asynchronous runtime.
-- `ctrlc`: For handling `Ctrl+C` interrupts.
+Backend:
+- `celestia_rpc`: For interacting with the Celestia node
+- `celestia_types`: For handling Celestia-specific types
+- `chess`: For chess game logic and move validation
+- `serde`: For game state serialization
+- `chrono`: For timestamp logging
+
+Frontend:
+- `yew`: Rust-based web framework
+- `trunk`: For building and serving
+- `chess.js`: Chess board visualization
+- `tailwindcss`: Styling
 
 ## Usage
 
 ### Build
 
-To build the dummy_rollup:
-
 ```shell
+# Build backend
 cargo build
+
+# Build frontend
+trunk build
 ```
 
-### Run
-
-To run the dummy_rollup:
+### Development
 
 ```shell
-cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>
+# Run backend WebSocket server
+cargo run
+
+# Run frontend development server (in a separate terminal)
+trunk serve
 ```
 
-Where:
-- `<namespace_plaintext>`: The plaintext string that will be converted to a hexadecimal namespace.
-- `<number_of_blobs>`: The number of blobs to generate and submit in each batch.
-- `<blob_size_in_bytes>`: The size of each blob in bytes.
+Then visit `http://localhost:8080` in your browser.
 
-The program will continuously submit batches of blobs to the Celestia node every 5 seconds. To stop the submission, press `Ctrl+C`. The program will handle the shutdown gracefully.
+### Playing Chess
 
-#### Example
+You can play chess in two ways:
+
+1. Web Interface:
+   - Visit `http://localhost:8080`
+   - Click and drag pieces to make moves
+   - Use the "New Game" button to start a new game
+
+2. Command Line:
+   ```shell
+   # Start a new game
+   cargo run -- chess new
+
+   # Make moves using UCI format (e.g., moving pawn from e2 to e4)
+   cargo run -- chess e2e4
+
+   # Make moves using SAN format (e.g., moving knight to f3)
+   cargo run -- chess Nf3
+   ```
+
+### Move Formats
+
+1. UCI format: Specifies the source and target squares
+   - Example: `e2e4` (move from e2 to e4)
+   - Example: `g1f3` (move from g1 to f3)
+
+2. SAN format: Standard chess notation
+   - Example: `e4` (pawn to e4)
+   - Example: `Nf3` (knight to f3)
+   - Example: `O-O` (kingside castling)
+
+### Game State
+
+The game state is stored on Celestia and includes:
+- Current board position (FEN format)
+- Last move played
+- Game status (ongoing/finished)
+- Winner (if game is over)
+
+Each move is verified for legality before being submitted to the chain.
+
+### Example Game
+
+Here's an example of how to play the famous Scholar's Mate:
 
 ```shell
-cargo run -- junkdata 10 1000
+# Start new game
+cargo run -- chess new
+
+# White's first move (e4)
+cargo run -- chess e2e4
+
+# Black's response (e5)
+cargo run -- chess e7e5
+
+# White's second move (Qh5)
+cargo run -- chess d1h5
+
+# Black's response (Nc6)
+cargo run -- chess b8c6
+
+# White's third move (Bc4)
+cargo run -- chess f1c4
+
+# Black's response (Nf6??)
+cargo run -- chess g8f6
+
+# White's checkmate (Qxf7#)
+cargo run -- chess h5f7
 ```
 
-This command posts continuously to the "junkdata" namespace with 10 blobs of 1000 bytes each.
+## Development
 
-If there are any issues with the submission, the program will print an error message and continue attempting to submit new batches.
-
-#### Example output
-
-When running the example command, you should see output similar to the following:
+### Project Structure
 
 ```
-Starting continuous blob submission. Press Ctrl+C to stop.
-Submitting batches of 10 blobs, each 197278 bytes, with namespace 'junkdata'
-Batch submitted successfully!
-Result height: 3216604
-Checking height 3216604...
-Found 9 blobs at height 3216604
-✅ Blob 0 verified successfully
-✅ Blob 1 verified successfully
-✅ Blob 2 verified successfully
-✅ Blob 3 verified successfully
-✅ Blob 4 verified successfully
-✅ Blob 5 verified successfully
-✅ Blob 6 verified successfully
-✅ Blob 7 verified successfully
-✅ Blob 8 verified successfully
-✅ Blob 9 verified successfully
-...
+/
+├── src/
+│   ├── main.rs        (backend game logic)
+│   ├── lib.rs         (shared types)
+│   ├── server.rs      (WebSocket server)
+│   └── frontend/
+│       ├── main.rs    (frontend entry)
+│       ├── app.rs     (main app component)
+│       ├── board.rs   (chess board component)
+│       └── game.rs    (game state management)
+├── static/
+│   ├── index.html
+│   └── assets/
+│       └── pieces/    (chess piece SVGs)
+├── Cargo.toml
+└── README.md
 ```
 
-If there is an error, you will see:
+### Running Tests
 
-```
-Error submitting batch: <error_message>
+```shell
+# Run backend tests
+cargo test
+
+# Run frontend tests
+wasm-pack test --chrome
 ```
