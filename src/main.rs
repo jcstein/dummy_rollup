@@ -268,6 +268,66 @@ async fn handle_connection(
                                                     continue;
                                                 }
                                             }
+
+                                            // Wait for the next block and verify the blob was included
+                                            let verify_msg = WebSocketMessage {
+                                                msg_type: "celestiaUpdate".to_string(),
+                                                move_str: None,
+                                                state: None,
+                                                message: Some("🔍 Verifying move inclusion in Celestia...".to_string()),
+                                            };
+                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                let _ = sender.send(Message::Text(
+                                                    serde_json::to_string(&verify_msg).unwrap()
+                                                )).await;
+                                            }
+
+                                            // Wait for a few seconds to allow the block to be created
+                                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                            
+                                            // Get the current height and check the last few blocks
+                                            let current_height = client.header_network_head().await.unwrap().height();
+                                            let mut found = false;
+                                            for h in (u64::from(height)..=u64::from(current_height)).rev() {
+                                                if let Ok(Some(blobs)) = client.blob_get_all(h, &[(*namespace).clone()]).await {
+                                                    for blob in blobs {
+                                                        if let Ok(state) = serde_json::from_slice::<GameState>(&blob.data) {
+                                                            if state.last_move == Some(move_str.clone()) {
+                                                                found = true;
+                                                                let verify_success_msg = WebSocketMessage {
+                                                                    msg_type: "celestiaUpdate".to_string(),
+                                                                    move_str: None,
+                                                                    state: None,
+                                                                    message: Some(format!("✅ Move verified in Celestia at height {}", h)),
+                                                                };
+                                                                if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                                    let _ = sender.send(Message::Text(
+                                                                        serde_json::to_string(&verify_success_msg).unwrap()
+                                                                    )).await;
+                                                                }
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if found {
+                                                    break;
+                                                }
+                                            }
+
+                                            if !found {
+                                                let verify_fail_msg = WebSocketMessage {
+                                                    msg_type: "celestiaUpdate".to_string(),
+                                                    move_str: None,
+                                                    state: None,
+                                                    message: Some("⚠️ Move submission verified but inclusion not yet confirmed".to_string()),
+                                                };
+                                                if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                    let _ = sender.send(Message::Text(
+                                                        serde_json::to_string(&verify_fail_msg).unwrap()
+                                                    )).await;
+                                                }
+                                            }
                                             
                                             // Broadcast new game state to all connected clients
                                             let state_update = WebSocketMessage {
@@ -353,18 +413,36 @@ async fn main() -> Result<()> {
     log_with_timestamp(&format!("WebSocket server listening on: {}", addr));
     
     while running.load(Ordering::SeqCst) {
-        let (stream, addr) = listener.accept().await?;
-        log_with_timestamp(&format!("New WebSocket connection: {}", addr));
-        
-        let peer_map = peer_map.clone();
-        let game = game.clone();
-        let client = client.clone();
-        let namespace = namespace.clone();
-        
-        tokio::spawn(async move {
-            handle_connection(peer_map, stream, addr, client, namespace, game).await;
-        });
+        tokio::select! {
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((stream, addr)) => {
+                        log_with_timestamp(&format!("New WebSocket connection: {}", addr));
+                        
+                        let peer_map = peer_map.clone();
+                        let game = game.clone();
+                        let client = client.clone();
+                        let namespace = namespace.clone();
+                        
+                        tokio::spawn(async move {
+                            handle_connection(peer_map, stream, addr, client, namespace, game).await;
+                        });
+                    }
+                    Err(e) => {
+                        log_with_timestamp(&format!("Failed to accept connection: {}", e));
+                    }
+                }
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                // Check running flag periodically
+                if !running.load(Ordering::SeqCst) {
+                    log_with_timestamp("Received shutdown signal, stopping server...");
+                    break;
+                }
+            }
+        }
     }
-    
+
+    log_with_timestamp("Server shutdown complete");
     Ok(())
 }
