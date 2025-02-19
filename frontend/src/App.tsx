@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { w3cwebsocket as W3CWebSocket } from 'websocket';
@@ -27,6 +27,15 @@ function App() {
   });
   const [logs, setLogs] = useState<string[]>([]);
   const [ws, setWs] = useState<W3CWebSocket | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [logs]);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toISOString();
@@ -54,7 +63,7 @@ function App() {
             const newGame = new Chess();
             newGame.load(data.state.fen);
             setGame(newGame);
-            addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
+            addLog(`Game state updated${data.move_str ? `: ${data.move_str}` : ' (Initial position)'}`);
           } else if (data.type === 'celestiaUpdate' && data.message) {
             addLog(data.message);
           }
@@ -69,7 +78,12 @@ function App() {
     };
 
     client.onerror = (error) => {
-      addLog(`WebSocket error: ${error.message}`);
+      addLog(`WebSocket error: ${error.message || 'Connection failed'}`);
+      setTimeout(() => {
+        if (client.readyState === client.CLOSED) {
+          client.close();
+        }
+      }, 1000);
     };
 
     setWs(client);
@@ -123,10 +137,11 @@ function App() {
                 </div>
                 <div className="mt-4">
                   <h3 className="text-lg font-medium">Celestia Updates</h3>
-                  <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded">
+                  <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded" style={{ scrollBehavior: 'smooth' }}>
                     {logs.map((log, index) => (
                       <div key={index} className="text-sm font-mono whitespace-pre-wrap">{log}</div>
                     ))}
+                    <div ref={logsEndRef} style={{ float: 'left', clear: 'both' }} />
                   </div>
                 </div>
               </div>

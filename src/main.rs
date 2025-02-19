@@ -240,7 +240,8 @@ async fn handle_connection(
                             if let Some(chess_move) = parse_uci(&move_str) {
                                 let mut current_game = game.lock().await;
                                 if current_game.make_move(chess_move) {
-                                    let game_state = GameState::from_game(&current_game, Some(move_str));
+                                    let move_str = move_str.clone();
+                                    let game_state = GameState::from_game(&current_game, Some(move_str.clone()));
                                     
                                     // Submit move to Celestia
                                     let height = client.header_network_head().await.unwrap().height();
@@ -271,7 +272,7 @@ async fn handle_connection(
                                             // Broadcast new game state to all connected clients
                                             let state_update = WebSocketMessage {
                                                 msg_type: "gameState".to_string(),
-                                                move_str: None,
+                                                move_str: Some(move_str.clone()),
                                                 state: Some(game_state),
                                                 message: None,
                                             };
