@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import WebSocket from 'websocket';
+import { w3cwebsocket as W3CWebSocket } from 'websocket';
 
 interface GameState {
   fen: string;
@@ -10,8 +10,15 @@ interface GameState {
   winner: string | null;
 }
 
+interface WebSocketMessage {
+  type: string;
+  move_str?: string;
+  state?: GameState;
+  message?: string;
+}
+
 function App() {
-  const [game, setGame] = useState(new Chess());
+  const [game, setGame] = useState<Chess>(new Chess());
   const [gameState, setGameState] = useState<GameState>({
     fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
     lastMove: null,
@@ -19,10 +26,20 @@ function App() {
     winner: null,
   });
   const [logs, setLogs] = useState<string[]>([]);
-  const [ws, setWs] = useState<WebSocket.w3cwebsocket | null>(null);
+  const [ws, setWs] = useState<W3CWebSocket | null>(null);
+
+  const addLog = useCallback((message: string) => {
+    const timestamp = new Date().toISOString();
+    setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
+  }, []);
 
   useEffect(() => {
-    const client = new WebSocket.w3cwebsocket('ws://localhost:8080');
+    const client = new W3CWebSocket('ws://localhost:8080', undefined, undefined, {
+      'Upgrade': 'websocket',
+      'Connection': 'Upgrade',
+      'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': 'your-key'
+    });
 
     client.onopen = () => {
       addLog('Connected to game server');
@@ -30,13 +47,19 @@ function App() {
 
     client.onmessage = (message) => {
       if (typeof message.data === 'string') {
-        const data = JSON.parse(message.data);
-        if (data.type === 'gameState') {
-          setGameState(data.state);
-          game.load(data.state.fen);
-          addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
-        } else if (data.type === 'celestiaUpdate') {
-          addLog(data.message);
+        try {
+          const data: WebSocketMessage = JSON.parse(message.data);
+          if (data.type === 'gameState' && data.state) {
+            setGameState(data.state);
+            const newGame = new Chess();
+            newGame.load(data.state.fen);
+            setGame(newGame);
+            addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
+          } else if (data.type === 'celestiaUpdate' && data.message) {
+            addLog(data.message);
+          }
+        } catch (e) {
+          addLog(`Error parsing message: ${e}`);
         }
       }
     };
@@ -45,17 +68,16 @@ function App() {
       addLog('Disconnected from game server');
     };
 
+    client.onerror = (error) => {
+      addLog(`WebSocket error: ${error.message}`);
+    };
+
     setWs(client);
 
     return () => {
       client.close();
     };
-  }, []);
-
-  const addLog = (message: string) => {
-    const timestamp = new Date().toISOString();
-    setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
-  };
+  }, [addLog]);
 
   const onDrop = (sourceSquare: string, targetSquare: string) => {
     try {
@@ -69,11 +91,12 @@ function App() {
 
       ws?.send(JSON.stringify({
         type: 'move',
-        move: `${sourceSquare}${targetSquare}`,
+        move_str: `${sourceSquare}${targetSquare}`,
       }));
 
       return true;
     } catch (error) {
+      addLog(`Error making move: ${error}`);
       return false;
     }
   };
@@ -90,6 +113,7 @@ function App() {
                   <Chessboard 
                     position={gameState.fen}
                     onPieceDrop={onDrop}
+                    boardWidth={400}
                   />
                 </div>
                 <div className="mt-4">
@@ -101,7 +125,7 @@ function App() {
                   <h3 className="text-lg font-medium">Celestia Updates</h3>
                   <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded">
                     {logs.map((log, index) => (
-                      <div key={index} className="text-sm font-mono">{log}</div>
+                      <div key={index} className="text-sm font-mono whitespace-pre-wrap">{log}</div>
                     ))}
                   </div>
                 </div>
