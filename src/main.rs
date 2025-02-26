@@ -1,15 +1,12 @@
 mod database;
 mod schema;
 
-use anyhow::{Context, Result};
 use celestia_rpc::Client;
-use celestia_types::nmt::Namespace;
 use chrono::Local;
-use database::{Database, DatabaseClient};
-use schema::DatabaseError;
-use std::env;
+use database::DatabaseClient;
+use schema::{DatabaseError, Record};
+use std::io::{self, BufRead, Write};
 use std::str::FromStr;
-use hex;
 
 /// Helper function to get current timestamp for logging
 fn log_with_timestamp(message: &str) {
@@ -17,177 +14,178 @@ fn log_with_timestamp(message: &str) {
     println!("[{}] {}", timestamp, message);
 }
 
-#[derive(Debug)]
 enum Command {
-    Create(Vec<u8>),
-    Read(String),
-    Update(String, Vec<u8>),
-    Delete(String),
+    Add(String, String),
+    Get(String),
     List,
+    Exit,
+    Help,
 }
 
 impl FromStr for Command {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split_whitespace().collect();
-        match parts.get(0).map(|s| *s) {
-            Some("create") => {
+        let parts: Vec<&str> = s.trim().split_whitespace().collect();
+        if parts.is_empty() {
+            return Err("Empty command".to_string());
+        }
+
+        match parts[0].to_lowercase().as_str() {
+            "add" => {
+                if parts.len() < 3 {
+                    return Err("Usage: add <key> <value>".to_string());
+                }
+                let key = parts[1].to_string();
+                let value = parts[2..].join(" ");
+                Ok(Command::Add(key, value))
+            }
+            "get" => {
                 if parts.len() != 2 {
-                    return Err("Usage: create <data>".to_string());
+                    return Err("Usage: get <key>".to_string());
                 }
-                Ok(Command::Create(parts[1].as_bytes().to_vec()))
+                Ok(Command::Get(parts[1].to_string()))
             }
-            Some("read") => {
-                if parts.len() != 2 {
-                    return Err("Usage: read <id>".to_string());
-                }
-                Ok(Command::Read(parts[1].to_string()))
-            }
-            Some("update") => {
-                if parts.len() != 3 {
-                    return Err("Usage: update <id> <new_data>".to_string());
-                }
-                Ok(Command::Update(parts[1].to_string(), parts[2].as_bytes().to_vec()))
-            }
-            Some("delete") => {
-                if parts.len() != 2 {
-                    return Err("Usage: delete <id>".to_string());
-                }
-                Ok(Command::Delete(parts[1].to_string()))
-            }
-            Some("list") => Ok(Command::List),
-            _ => Err("Unknown command. Available commands: create, read, update, delete, list".to_string()),
+            "list" => Ok(Command::List),
+            "exit" | "quit" => Ok(Command::Exit),
+            "help" => Ok(Command::Help),
+            _ => Err(format!("Unknown command: {}", parts[0])),
         }
     }
 }
 
-async fn handle_command(db: &impl Database, cmd: Command) -> Result<(), DatabaseError> {
+async fn handle_command(db: &DatabaseClient, cmd: Command) -> Result<(), DatabaseError> {
     match cmd {
-        Command::Create(data) => {
-            let id = db.create_record(data).await?;
-            log_with_timestamp(&format!("Created record with ID: {}", id));
+        Command::Add(key, value) => {
+            log_with_timestamp(&format!("Adding record with key '{}'", key));
+            let record = Record::new(key, value);
+            db.add_record(record).await?;
+            log_with_timestamp("Record added successfully");
         }
-        Command::Read(id) => {
-            let record = db.read_record(&id).await?;
-            log_with_timestamp(&format!(
-                "Record {}: created={}, updated={}, data={}",
-                record.id,
-                record.created_at,
-                record.updated_at,
-                String::from_utf8_lossy(&record.data)
-            ));
-        }
-        Command::Update(id, data) => {
-            db.update_record(&id, data).await?;
-            log_with_timestamp(&format!("Updated record {}", id));
-        }
-        Command::Delete(id) => {
-            db.delete_record(&id).await?;
-            log_with_timestamp(&format!("Deleted record {}", id));
+        Command::Get(key) => {
+            log_with_timestamp(&format!("Retrieving record with key '{}'", key));
+            match db.get_record(&key).await? {
+                Some(record) => {
+                    println!("Key: {}", record.key);
+                    println!("Value: {}", record.value);
+                    println!("Created: {}", record.created_at);
+                    if let Some(updated) = record.updated_at {
+                        println!("Updated: {}", updated);
+                    }
+                }
+                None => log_with_timestamp(&format!("No record found with key '{}'", key)),
+            }
         }
         Command::List => {
+            log_with_timestamp("Listing all records");
             let records = db.list_records().await?;
-            log_with_timestamp(&format!("Found {} records:", records.len()));
-            for record in records {
-                println!(
-                    "  {} (created={}, updated={}): {}",
-                    record.id,
-                    record.created_at,
-                    record.updated_at,
-                    String::from_utf8_lossy(&record.data)
-                );
+            if records.is_empty() {
+                println!("No records found");
+            } else {
+                for record in records {
+                    println!("Key: {}", record.key);
+                    println!("Value: {}", record.value);
+                    println!("Created: {}", record.created_at);
+                    if let Some(updated) = record.updated_at {
+                        println!("Updated: {}", updated);
+                    }
+                    println!("---");
+                }
             }
+        }
+        Command::Exit => {
+            log_with_timestamp("Exiting application");
+            std::process::exit(0);
+        }
+        Command::Help => {
+            println!("\nAvailable commands:");
+            println!("  add <key> <value>  - Add a new record or update existing one");
+            println!("  get <key>          - Retrieve a record by key");
+            println!("  list               - List all records");
+            println!("  exit               - Exit the application");
+            println!("  help               - Show this help message");
         }
     }
     Ok(())
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_with_timestamp("Starting Celestia database application");
     
-    // Parse command line arguments
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 || args.len() > 3 {
         log_with_timestamp("Error: Invalid number of arguments");
-        eprintln!("Usage: cargo run -- <namespace_plaintext>");
-        std::process::exit(1);
+        println!("Usage: cargo run -- <namespace_plaintext> [start_height]");
+        return Ok(());
     }
-
-    // Extract and parse command line arguments
+    
     let namespace_plaintext = &args[1];
-
-    log_with_timestamp(&format!(
-        "Configuration - Namespace: {}",
-        namespace_plaintext
-    ));
-
-    // Check for authentication token in environment variables
-    let token = match env::var("CELESTIA_NODE_AUTH_TOKEN") {
-        Ok(token) => {
-            log_with_timestamp("Found CELESTIA_NODE_AUTH_TOKEN in environment");
-            Some(token)
+    let start_height = if args.len() == 3 {
+        match args[2].parse::<u64>() {
+            Ok(height) => {
+                log_with_timestamp(&format!("Configuration - Namespace: {}, Start Height: {}", namespace_plaintext, height));
+                Some(height)
+            },
+            Err(_) => {
+                log_with_timestamp("Error: Invalid start height, must be a positive number");
+                println!("Usage: cargo run -- <namespace_plaintext> [start_height]");
+                return Ok(());
+            }
         }
-        Err(_) => {
-            log_with_timestamp("Warning: CELESTIA_NODE_AUTH_TOKEN not set");
-            println!("Note: CELESTIA_NODE_AUTH_TOKEN not set. Make sure to either:");
-            println!("  1. Set CELESTIA_NODE_AUTH_TOKEN environment variable, or");
-            println!("  2. Use --rpc.skip-auth when starting your Celestia node");
-            None
-        }
+    } else {
+        log_with_timestamp(&format!("Configuration - Namespace: {}", namespace_plaintext));
+        None
     };
-
-    // Create namespace from plaintext input
-    let namespace_hex = hex::encode(namespace_plaintext);
-    let namespace = Namespace::new_v0(&hex::decode(&namespace_hex)?)?;
-    log_with_timestamp(&format!("Created namespace '{}'", namespace_plaintext));
-
-    // Initialize Celestia client with WebSocket connection
-    log_with_timestamp("Connecting to Celestia node at ws://localhost:26658");
-    let client = Client::new("ws://localhost:26658", token.as_deref())
-        .await
-        .context("Failed to connect to Celestia node")?;
-    log_with_timestamp("Successfully connected to Celestia node");
-
+    
+    // Ensure namespace is exactly 8 bytes (Celestia requirement)
+    let mut namespace_bytes = namespace_plaintext.as_bytes().to_vec();
+    if namespace_bytes.len() > 8 {
+        namespace_bytes.truncate(8);
+    } else {
+        while namespace_bytes.len() < 8 {
+            namespace_bytes.push(0);
+        }
+    }
+    
     // Create database client
-    let db = DatabaseClient::new(client, namespace).await?;
+    let auth_token = std::env::var("CELESTIA_NODE_AUTH_TOKEN").ok();
+    log_with_timestamp("Connecting to Celestia node...");
+    let client = Client::new("http://localhost:26658", auth_token.as_deref())
+        .await
+        .map_err(|e| Box::new(DatabaseError::CelestiaError(e.to_string())) as Box<dyn std::error::Error>)?;
+    log_with_timestamp("Successfully connected to Celestia node");
+    
+    let db_client = DatabaseClient::new(client, namespace_bytes, start_height).await?;
     log_with_timestamp("Database client initialized");
 
     println!("\nAvailable commands:");
-    println!("  create <data>      - Create a new record");
-    println!("  read <id>          - Read a record by ID");
-    println!("  update <id> <data> - Update a record");
-    println!("  delete <id>        - Delete a record");
-    println!("  list              - List all records");
-    println!("  exit              - Exit the application");
+    println!("  add <key> <value>  - Add a new record or update existing one");
+    println!("  get <key>          - Retrieve a record by key");
+    println!("  list               - List all records");
+    println!("  exit               - Exit the application");
+    println!("  help               - Show this help message");
+    println!("\nEnter commands below:");
 
-    // Main command loop
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+    let mut input = String::new();
+
     loop {
-        print!("\n> ");
-        use std::io::{self, Write};
+        print!("> ");
         io::stdout().flush()?;
+        input.clear();
+        handle.read_line(&mut input)?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim();
-
-        if input == "exit" {
-            break;
-        }
-
-        match Command::from_str(input) {
+        match Command::from_str(&input) {
             Ok(cmd) => {
-                if let Err(e) = handle_command(&db, cmd).await {
+                if let Err(e) = handle_command(&db_client, cmd).await {
                     log_with_timestamp(&format!("Error: {}", e));
                 }
             }
             Err(e) => {
-                log_with_timestamp(&format!("Error: {}", e));
+                log_with_timestamp(&format!("Command error: {}", e));
             }
         }
     }
-
-    log_with_timestamp("Database application stopped");
-    Ok(())
 }
