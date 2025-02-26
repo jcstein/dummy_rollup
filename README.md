@@ -1,80 +1,100 @@
-# dummy_rollup
+# Celestia Database
 
-This is a dummy rollup project to test posting and retrieving data from Celestia.
+A public database implementation on Celestia that allows storing and retrieving records using a namespace.
+
+## Features
+
+- Store and retrieve records using a key-value model
+- Namespace-based organization
+- Automatic metadata tracking
+- Simple CLI interface
 
 ## Prerequisites
 
-- Rust
-- Celestia light node running
+- Rust and Cargo installed
+- A running Celestia node (light node or full node)
+- Proper authentication token for the Celestia node
 
-### Setting up Celestia light node
+## Setup
 
-To start a Celestia light node, use the following command:
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/celestia-database.git
+   cd celestia-database
+   ```
 
-```shell
-celestia light start --core.ip rpc-mocha.pops.one --core.port 9090 --p2p.network mocha --rpc.skip-auth
-```
+2. Set up your Celestia node:
+   - Follow the [official Celestia documentation](https://docs.celestia.org/nodes/light-node) to set up a light node
+   - Make sure to start your node with the `--rpc.enable` flag
+   - For testing, you can use the `--rpc.skip-auth` flag to bypass authentication
 
-### Environment Variables
-
-- `CELESTIA_NODE_AUTH_TOKEN`: Authentication token for the Celestia node
-  - If not set, ensure you use `--rpc.skip-auth` when starting your Celestia node
-
-## Dependencies
-
-The project uses the following dependencies:
-
-- `anyhow`: For error handling
-- `celestia_rpc`: For interacting with the Celestia node
-- `celestia_types`: For handling Celestia-specific types
-- `rand`: For generating random data for the blobs
-- `tokio`: For asynchronous runtime
-- `ctrlc`: For handling `Ctrl+C` interrupts
+3. Set the authentication token (if not using `--rpc.skip-auth`):
+   ```
+   export CELESTIA_NODE_AUTH_TOKEN=your_auth_token
+   ```
 
 ## Usage
 
-### Build
-
-```shell
-cargo build
-```
-
-### Run
-
-```shell
-cargo run -- <namespace_plaintext> <number_of_blobs> <blob_size_in_bytes>
-```
-
-Parameters:
-- `<namespace_plaintext>`: The namespace for your blobs
-- `<number_of_blobs>`: Number of blobs per batch
-- `<blob_size_in_bytes>`: Size of each blob in bytes
-
-#### Example
-
-```shell
-cargo run -- testing 9 197278
-```
-
-This will:
-1. Connect to your local Celestia node
-2. Create a namespace called "testing"
-3. Submit batches of 9 blobs (197278 bytes each)
-4. Verify each submission by retrieving and checking the blobs
-5. Continue submitting new batches with a short delay between them
-
-#### Example Output
+Run the application with a namespace parameter:
 
 ```
-[2025-02-19 12:11:18.965] Starting rollup application
-[2025-02-19 12:11:18.967] Configuration - Namespace: testing, Number of blobs: 9, Blob size: 197278 bytes
-[2025-02-19 12:11:18.973] Successfully connected to Celestia node
-[2025-02-19 12:11:45.845] Batch #1 submitted successfully at height 4770599
-[2025-02-19 12:11:53.321] Found 9 blobs at height 4770599
-[2025-02-19 12:11:53.321] ✅ Blob 0 verified successfully
-...
-[2025-02-19 12:11:53.321] ✅ Blob 8 verified successfully
-[2025-02-19 12:11:53.321] Batch #1 fully verified
+cargo run -- your_namespace
 ```
 
-The program will continue running and submitting batches until interrupted with Ctrl+C.
+The namespace will be padded or truncated to exactly 8 bytes as required by Celestia.
+
+### Available Commands
+
+Once the application is running, you can use the following commands:
+
+- `add <key> <value>` - Add a new record or update an existing one
+- `get <key>` - Retrieve a record by key
+- `list` - List all records
+- `exit` or `quit` - Exit the application
+- `help` - Show help message
+
+## Example
+
+```
+$ cargo run -- testdb
+[2025-02-25 21:03:07.775] Starting Celestia database application
+[2025-02-25 21:03:07.776] Configuration - Namespace: testdb
+[2025-02-25 21:03:07.776] Connecting to Celestia node...
+[2025-02-25 21:03:07.777] Successfully connected to Celestia node
+[2025-02-25 21:03:07.778] Database client initialized
+
+Available commands:
+  add <key> <value>  - Add a new record or update existing one
+  get <key>          - Retrieve a record by key
+  list               - List all records
+  exit               - Exit the application
+  help               - Show this help message
+
+Enter commands below:
+> add user1 {"name": "John Doe", "email": "john@example.com"}
+[2025-02-25 21:03:15.123] Adding record with key 'user1'
+[2025-02-25 21:03:15.456] Record added successfully
+> get user1
+[2025-02-25 21:03:20.789] Retrieving record with key 'user1'
+Key: user1
+Value: {"name": "John Doe", "email": "john@example.com"}
+Created: 2025-02-25T21:03:15.123Z
+> list
+[2025-02-25 21:03:25.321] Listing all records
+Key: user1
+Value: {"name": "John Doe", "email": "john@example.com"}
+Created: 2025-02-25T21:03:15.123Z
+---
+> exit
+[2025-02-25 21:03:30.654] Exiting application
+```
+
+## Troubleshooting
+
+- **Authentication errors**: Make sure you have set the `CELESTIA_NODE_AUTH_TOKEN` environment variable or started your node with `--rpc.skip-auth`
+- **Connection errors**: Verify that your Celestia node is running and accessible at the default RPC endpoint (http://localhost:26658)
+- **Namespace errors**: Ensure your namespace is valid (will be automatically padded/truncated to 8 bytes)
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
