@@ -9,6 +9,12 @@ use chess::{Game, ChessMove, MoveGen, Color, Square, Piece, Rank, File};
 use serde::{Serialize, Deserialize};
 use std::str::FromStr;
 use ctrlc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::{accept_async, WebSocketStream, tungstenite::Message};
+use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
+use tokio::sync::Mutex;
+use std::net::SocketAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct GameState {
@@ -16,6 +22,18 @@ struct GameState {
     last_move: Option<String>,
     game_over: bool,
     winner: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct WebSocketMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    move_str: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<GameState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
 }
 
 impl GameState {
@@ -159,6 +177,207 @@ fn print_board(game: &Game) {
     println!("    a b c d e f g h\n");
 }
 
+type PeerMap = Arc<Mutex<HashMap<SocketAddr, futures_util::stream::SplitSink<WebSocketStream<TcpStream>, Message>>>>;
+
+async fn handle_connection(
+    peer_map: PeerMap,
+    raw_stream: TcpStream,
+    addr: SocketAddr,
+    client: Arc<Client>,
+    namespace: Arc<Namespace>,
+    game: Arc<Mutex<Game>>,
+) {
+    let ws_stream = match tokio_tungstenite::accept_async(raw_stream).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            log_with_timestamp(&format!("Failed to accept websocket connection: {}", e));
+            return;
+        }
+    };
+    
+    let (ws_sender, mut ws_receiver) = ws_stream.split();
+    
+    // Send initial game state
+    let current_game = game.lock().await;
+    let game_state = GameState::from_game(&current_game, None);
+    let initial_state = WebSocketMessage {
+        msg_type: "gameState".to_string(),
+        move_str: None,
+        state: Some(game_state),
+        message: None,
+    };
+    
+    {
+        let mut peer_map = peer_map.lock().await;
+        peer_map.insert(addr, ws_sender);
+    }
+    
+    let peer_map_clone = peer_map.clone();
+    if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+        if let Err(e) = sender.send(Message::Text(
+            serde_json::to_string(&initial_state).unwrap()
+        )).await {
+            log_with_timestamp(&format!("Failed to send initial state: {}", e));
+            return;
+        }
+    }
+    drop(current_game);
+    
+    while let Some(result) = ws_receiver.next().await {
+        let msg = match result {
+            Ok(msg) => msg,
+            Err(e) => {
+                log_with_timestamp(&format!("Error receiving message: {}", e));
+                break;
+            }
+        };
+        
+        if let Ok(text) = msg.to_text() {
+            if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(text) {
+                match ws_msg.msg_type.as_str() {
+                    "move" => {
+                        if let Some(move_str) = ws_msg.move_str {
+                            if let Some(chess_move) = parse_uci(&move_str) {
+                                let mut current_game = game.lock().await;
+                                if current_game.make_move(chess_move) {
+                                    let move_str = move_str.clone();
+                                    let game_state = GameState::from_game(&current_game, Some(move_str.clone()));
+                                    
+                                    // Submit move to Celestia
+                                    let height = client.header_network_head().await.unwrap().height();
+                                    let blob = Blob::new(
+                                        (*namespace).clone(),
+                                        serde_json::to_vec(&game_state).unwrap(),
+                                        AppVersion::V2,
+                                    ).unwrap();
+                                    
+                                    match client.blob_submit(&[blob], TxConfig::default()).await {
+                                        Ok(_) => {
+                                            let celestia_msg = WebSocketMessage {
+                                                msg_type: "celestiaUpdate".to_string(),
+                                                move_str: None,
+                                                state: None,
+                                                message: Some(format!("✅ Move submitted to Celestia at height {}", height)),
+                                            };
+                                            
+                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                if let Err(e) = sender.send(Message::Text(
+                                                    serde_json::to_string(&celestia_msg).unwrap()
+                                                )).await {
+                                                    log_with_timestamp(&format!("Failed to send Celestia update: {}", e));
+                                                    continue;
+                                                }
+                                            }
+
+                                            // Wait for the next block and verify the blob was included
+                                            let verify_msg = WebSocketMessage {
+                                                msg_type: "celestiaUpdate".to_string(),
+                                                move_str: None,
+                                                state: None,
+                                                message: Some("🔍 Verifying move inclusion in Celestia...".to_string()),
+                                            };
+                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                let _ = sender.send(Message::Text(
+                                                    serde_json::to_string(&verify_msg).unwrap()
+                                                )).await;
+                                            }
+
+                                            // Wait for a few seconds to allow the block to be created
+                                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                            
+                                            // Get the current height and check the last few blocks
+                                            let current_height = client.header_network_head().await.unwrap().height();
+                                            let mut found = false;
+                                            for h in (u64::from(height)..=u64::from(current_height)).rev() {
+                                                if let Ok(Some(blobs)) = client.blob_get_all(h, &[(*namespace).clone()]).await {
+                                                    for blob in blobs {
+                                                        if let Ok(state) = serde_json::from_slice::<GameState>(&blob.data) {
+                                                            if state.last_move == Some(move_str.clone()) {
+                                                                found = true;
+                                                                let verify_success_msg = WebSocketMessage {
+                                                                    msg_type: "celestiaUpdate".to_string(),
+                                                                    move_str: None,
+                                                                    state: None,
+                                                                    message: Some(format!("✅ Move verified in Celestia at height {}", h)),
+                                                                };
+                                                                if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                                    let _ = sender.send(Message::Text(
+                                                                        serde_json::to_string(&verify_success_msg).unwrap()
+                                                                    )).await;
+                                                                }
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if found {
+                                                    break;
+                                                }
+                                            }
+
+                                            if !found {
+                                                let verify_fail_msg = WebSocketMessage {
+                                                    msg_type: "celestiaUpdate".to_string(),
+                                                    move_str: None,
+                                                    state: None,
+                                                    message: Some("⚠️ Move submission verified but inclusion not yet confirmed".to_string()),
+                                                };
+                                                if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                    let _ = sender.send(Message::Text(
+                                                        serde_json::to_string(&verify_fail_msg).unwrap()
+                                                    )).await;
+                                                }
+                                            }
+                                            
+                                            // Broadcast new game state to all connected clients
+                                            let state_update = WebSocketMessage {
+                                                msg_type: "gameState".to_string(),
+                                                move_str: Some(move_str.clone()),
+                                                state: Some(game_state),
+                                                message: None,
+                                            };
+                                            let state_msg = Message::Text(
+                                                serde_json::to_string(&state_update).unwrap()
+                                            );
+                                            
+                                            let mut peer_map = peer_map_clone.lock().await;
+                                            for (_, sender) in peer_map.iter_mut() {
+                                                if let Err(e) = sender.send(state_msg.clone()).await {
+                                                    log_with_timestamp(&format!("Failed to broadcast game state: {}", e));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let error_msg = WebSocketMessage {
+                                                msg_type: "celestiaUpdate".to_string(),
+                                                move_str: None,
+                                                state: None,
+                                                message: Some(format!("❌ Failed to submit move to Celestia: {}", e)),
+                                            };
+                                            
+                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
+                                                if let Err(e) = sender.send(Message::Text(
+                                                    serde_json::to_string(&error_msg).unwrap()
+                                                )).await {
+                                                    log_with_timestamp(&format!("Failed to send error message: {}", e));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    let mut peer_map = peer_map.lock().await;
+    peer_map.remove(&addr);
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
@@ -169,12 +388,12 @@ async fn main() -> Result<()> {
     })?;
 
     // Initialize Celestia client with local light node
-    let client = Client::new("http://localhost:26658", None).await?;
-    let namespace = Namespace::new(0, &create_namespace("chess"))?;
+    let client = Arc::new(Client::new("http://localhost:26658", None).await?);
+    let namespace = Arc::new(Namespace::new(0, &create_namespace("chess"))?);
     
     // Try to load existing game state from latest height
     let height: u64 = client.header_network_head().await?.height().into();
-    let mut game = if let Ok(Some(state)) = get_latest_game_state(&client, &namespace, height).await {
+    let initial_game = if let Ok(Some(state)) = get_latest_game_state(&client, &namespace, height).await {
         match Game::from_str(&state.fen) {
             Ok(g) => g,
             Err(e) => {
@@ -186,87 +405,44 @@ async fn main() -> Result<()> {
         Game::new()
     };
     
-    println!("Welcome to CLI Chess!");
-    println!("Enter moves in UCI format (e.g., 'e2e4') or 'quit' to exit");
+    let game = Arc::new(Mutex::new(initial_game));
+    let peer_map = Arc::new(Mutex::new(HashMap::new()));
+    
+    let addr = "127.0.0.1:8080".to_string();
+    let listener = TcpListener::bind(&addr).await?;
+    log_with_timestamp(&format!("WebSocket server listening on: {}", addr));
     
     while running.load(Ordering::SeqCst) {
-        print_board(&game);
-        
-        if game.result().is_some() {
-            println!("Game Over! Result: {:?}", game.result().unwrap());
-            break;
-        }
-        
-        println!("Current turn: {}", if game.side_to_move() == Color::White { "White" } else { "Black" });
-        print!("Enter your move: ");
-        
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let input = input.trim();
-        
-        if input.eq_ignore_ascii_case("quit") {
-            break;
-        }
-        
-        match parse_uci(input) {
-            Some(chess_move) => {
-                let legal_moves: Vec<ChessMove> = MoveGen::new_legal(&game.current_position()).collect();
-                if legal_moves.contains(&chess_move) {
-                    game.make_move(chess_move);
-                    println!("Move played: {}", chess_move);
-                    
-                    // Create and submit game state to Celestia
-                    let state = GameState::from_game(&game, Some(chess_move.to_string()));
-                    let state_json = serde_json::to_vec(&state)?;
-                    let blob = Blob::new(namespace.clone(), state_json, AppVersion::V2)?;
-                    
-                    match client.blob_submit(&[blob], TxConfig::default()).await {
-                        Ok(_) => {
-                            log_with_timestamp("✅ Game state submitted to Celestia");
-                            
-                            // Get the latest height and verify the state immediately
-                            let height: u64 = client.header_network_head().await?.height().into();
-                            match get_latest_game_state(&client, &namespace, height).await {
-                                Ok(Some(celestia_state)) => {
-                                    // Verify the state matches what we submitted
-                                    if celestia_state.fen != state.fen {
-                                        log_with_timestamp("⚠️  Warning: Celestia state doesn't match local state!");
-                                        log_with_timestamp(&format!("Local FEN: {}", state.fen));
-                                        log_with_timestamp(&format!("Celestia FEN: {}", celestia_state.fen));
-                                        // Revert to Celestia's state
-                                        match Game::from_str(&celestia_state.fen) {
-                                            Ok(g) => {
-                                                game = g;
-                                                log_with_timestamp("✅ Reverted to Celestia state");
-                                            }
-                                            Err(e) => {
-                                                log_with_timestamp(&format!("❌ Failed to load Celestia state: {}", e));
-                                            }
-                                        }
-                                    } else {
-                                        log_with_timestamp("✅ Move verified on Celestia");
-                                    }
-                                }
-                                Ok(None) => {
-                                    log_with_timestamp("⚠️  Warning: Move not found on Celestia after submission!");
-                                }
-                                Err(e) => {
-                                    log_with_timestamp(&format!("❌ Failed to verify move on Celestia: {}", e));
-                                }
-                            }
-                        }
-                        Err(e) => log_with_timestamp(&format!("❌ Failed to submit game state: {}", e)),
+        tokio::select! {
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((stream, addr)) => {
+                        log_with_timestamp(&format!("New WebSocket connection: {}", addr));
+                        
+                        let peer_map = peer_map.clone();
+                        let game = game.clone();
+                        let client = client.clone();
+                        let namespace = namespace.clone();
+                        
+                        tokio::spawn(async move {
+                            handle_connection(peer_map, stream, addr, client, namespace, game).await;
+                        });
                     }
-                } else {
-                    println!("Illegal move! Try again.");
+                    Err(e) => {
+                        log_with_timestamp(&format!("Failed to accept connection: {}", e));
+                    }
                 }
             }
-            None => {
-                println!("Invalid move format! Use UCI format (e.g., 'e2e4')");
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                // Check running flag periodically
+                if !running.load(Ordering::SeqCst) {
+                    log_with_timestamp("Received shutdown signal, stopping server...");
+                    break;
+                }
             }
         }
     }
-    
-    println!("Thanks for playing!");
+
+    log_with_timestamp("Server shutdown complete");
     Ok(())
 }

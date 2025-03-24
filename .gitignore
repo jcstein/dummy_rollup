@@ -2,3 +2,19 @@
 .tasks/
 
 .DS_Store
+
+# Root level node modules and package files (these should only be in frontend/)
+/node_modules
+/package.json
+/package-lock.json
+
+# Frontend
+/frontend/node_modules
+/frontend/build
+/frontend/.env.local
+/frontend/.env.development.local
+/frontend/.env.test.local
+/frontend/.env.production.local
+/frontend/npm-debug.log*
+/frontend/yarn-debug.log*
+/frontend/yarn-error.log*

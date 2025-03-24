@@ -1,0 +1,1476 @@
+From d864e236c991591361c17e4ffee3e4ba96707e2d Mon Sep 17 00:00:00 2001
+From: jcstein <46639943+jcstein@users.noreply.github.com>
+Date: Wed, 19 Feb 2025 22:37:03 +0100
+Subject: [PATCH 1/5] Add frontend implementation with React and WebSocket
+ integration
+
+---
+ frontend/package.json       |  43 +++++++++++++
+ frontend/public/index.html  |  20 ++++++
+ frontend/src/App.tsx        | 117 ++++++++++++++++++++++++++++++++++++
+ frontend/src/index.css      |  17 ++++++
+ frontend/src/index.tsx      |  14 +++++
+ frontend/tailwind.config.js |  17 ++++++
+ 6 files changed, 228 insertions(+)
+ create mode 100644 frontend/package.json
+ create mode 100644 frontend/public/index.html
+ create mode 100644 frontend/src/App.tsx
+ create mode 100644 frontend/src/index.css
+ create mode 100644 frontend/src/index.tsx
+ create mode 100644 frontend/tailwind.config.js
+
+diff --git a/frontend/package.json b/frontend/package.json
+new file mode 100644
+index 0000000..69bb9a6
+--- /dev/null
++++ b/frontend/package.json
+@@ -0,0 +1,43 @@
++{
++  "name": "celestia-chess-frontend",
++  "version": "0.1.0",
++  "private": true,
++  "dependencies": {
++    "@types/node": "^16.18.0",
++    "@types/react": "^18.2.0",
++    "@types/react-dom": "^18.2.0",
++    "chess.js": "^1.0.0-beta.6",
++    "react": "^18.2.0",
++    "react-chessboard": "^4.3.0",
++    "react-dom": "^18.2.0",
++    "react-scripts": "5.0.1",
++    "tailwindcss": "^3.4.0",
++    "@tailwindcss/forms": "^0.5.0",
++    "typescript": "^4.9.5",
++    "websocket": "^1.0.34"
++  },
++  "scripts": {
++    "start": "react-scripts start",
++    "build": "react-scripts build",
++    "test": "react-scripts test",
++    "eject": "react-scripts eject"
++  },
++  "eslintConfig": {
++    "extends": [
++      "react-app",
++      "react-app/jest"
++    ]
++  },
++  "browserslist": {
++    "production": [
++      ">0.2%",
++      "not dead",
++      "not op_mini all"
++    ],
++    "development": [
++      "last 1 chrome version",
++      "last 1 firefox version",
++      "last 1 safari version"
++    ]
++  }
++} 
+\ No newline at end of file
+diff --git a/frontend/public/index.html b/frontend/public/index.html
+new file mode 100644
+index 0000000..4ad288e
+--- /dev/null
++++ b/frontend/public/index.html
+@@ -0,0 +1,20 @@
++<!DOCTYPE html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8" />
++    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
++    <meta name="viewport" content="width=device-width, initial-scale=1" />
++    <meta name="theme-color" content="#000000" />
++    <meta
++      name="description"
++      content="Celestia Chess - A decentralized chess game on Celestia blockchain"
++    />
++    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
++    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
++    <title>Celestia Chess</title>
++  </head>
++  <body>
++    <noscript>You need to enable JavaScript to run this app.</noscript>
++    <div id="root"></div>
++  </body>
++</html> 
+\ No newline at end of file
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+new file mode 100644
+index 0000000..fb58155
+--- /dev/null
++++ b/frontend/src/App.tsx
+@@ -0,0 +1,117 @@
++import React, { useState, useEffect } from 'react';
++import { Chessboard } from 'react-chessboard';
++import { Chess } from 'chess.js';
++import WebSocket from 'websocket';
++
++interface GameState {
++  fen: string;
++  lastMove: string | null;
++  gameOver: boolean;
++  winner: string | null;
++}
++
++function App() {
++  const [game, setGame] = useState(new Chess());
++  const [gameState, setGameState] = useState<GameState>({
++    fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
++    lastMove: null,
++    gameOver: false,
++    winner: null,
++  });
++  const [logs, setLogs] = useState<string[]>([]);
++  const [ws, setWs] = useState<WebSocket.w3cwebsocket | null>(null);
++
++  useEffect(() => {
++    const client = new WebSocket.w3cwebsocket('ws://localhost:8080');
++
++    client.onopen = () => {
++      addLog('Connected to game server');
++    };
++
++    client.onmessage = (message) => {
++      if (typeof message.data === 'string') {
++        const data = JSON.parse(message.data);
++        if (data.type === 'gameState') {
++          setGameState(data.state);
++          game.load(data.state.fen);
++          addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
++        } else if (data.type === 'celestiaUpdate') {
++          addLog(data.message);
++        }
++      }
++    };
++
++    client.onclose = () => {
++      addLog('Disconnected from game server');
++    };
++
++    setWs(client);
++
++    return () => {
++      client.close();
++    };
++  }, []);
++
++  const addLog = (message: string) => {
++    const timestamp = new Date().toISOString();
++    setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
++  };
++
++  const onDrop = (sourceSquare: string, targetSquare: string) => {
++    try {
++      const move = game.move({
++        from: sourceSquare,
++        to: targetSquare,
++        promotion: 'q',
++      });
++
++      if (move === null) return false;
++
++      ws?.send(JSON.stringify({
++        type: 'move',
++        move: `${sourceSquare}${targetSquare}`,
++      }));
++
++      return true;
++    } catch (error) {
++      return false;
++    }
++  };
++
++  return (
++    <div className="min-h-screen bg-gray-100 py-6 flex flex-col justify-center sm:py-12">
++      <div className="relative py-3 sm:max-w-xl sm:mx-auto">
++        <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 to-light-blue-500 shadow-lg transform -skew-y-6 sm:skew-y-0 sm:-rotate-6 sm:rounded-3xl"></div>
++        <div className="relative px-4 py-10 bg-white shadow-lg sm:rounded-3xl sm:p-20">
++          <div className="max-w-md mx-auto">
++            <div className="divide-y divide-gray-200">
++              <div className="py-8 text-base leading-6 space-y-4 text-gray-700 sm:text-lg sm:leading-7">
++                <div className="w-[400px] h-[400px]">
++                  <Chessboard 
++                    position={gameState.fen}
++                    onPieceDrop={onDrop}
++                  />
++                </div>
++                <div className="mt-4">
++                  <h3 className="text-lg font-medium">Game Status</h3>
++                  <p>{gameState.gameOver ? `Game Over - Winner: ${gameState.winner}` : `Current Turn: ${game.turn() === 'w' ? 'White' : 'Black'}`}</p>
++                  <p>Last Move: {gameState.lastMove || 'None'}</p>
++                </div>
++                <div className="mt-4">
++                  <h3 className="text-lg font-medium">Celestia Updates</h3>
++                  <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded">
++                    {logs.map((log, index) => (
++                      <div key={index} className="text-sm font-mono">{log}</div>
++                    ))}
++                  </div>
++                </div>
++              </div>
++            </div>
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++}
++
++export default App; 
+\ No newline at end of file
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+new file mode 100644
+index 0000000..e878b43
+--- /dev/null
++++ b/frontend/src/index.css
+@@ -0,0 +1,17 @@
++@tailwind base;
++@tailwind components;
++@tailwind utilities;
++
++body {
++  margin: 0;
++  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
++    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
++    sans-serif;
++  -webkit-font-smoothing: antialiased;
++  -moz-osx-font-smoothing: grayscale;
++}
++
++code {
++  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
++    monospace;
++} 
+\ No newline at end of file
+diff --git a/frontend/src/index.tsx b/frontend/src/index.tsx
+new file mode 100644
+index 0000000..d035f09
+--- /dev/null
++++ b/frontend/src/index.tsx
+@@ -0,0 +1,14 @@
++import React from 'react';
++import ReactDOM from 'react-dom/client';
++import './index.css';
++import App from './App';
++
++const root = ReactDOM.createRoot(
++  document.getElementById('root') as HTMLElement
++);
++
++root.render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>
++); 
+\ No newline at end of file
+diff --git a/frontend/tailwind.config.js b/frontend/tailwind.config.js
+new file mode 100644
+index 0000000..8131cf7
+--- /dev/null
++++ b/frontend/tailwind.config.js
+@@ -0,0 +1,17 @@
++module.exports = {
++  content: [
++    "./src/**/*.{js,jsx,ts,tsx}",
++  ],
++  theme: {
++    extend: {
++      colors: {
++        'light-blue': {
++          500: '#3B82F6',
++        },
++      },
++    },
++  },
++  plugins: [
++    require('@tailwindcss/forms'),
++  ],
++} 
+\ No newline at end of file
+-- 
+2.39.5 (Apple Git-154)
+
+
+From f1179f8d46d3acda132341e2db3b356081e9962d Mon Sep 17 00:00:00 2001
+From: jcstein <46639943+jcstein@users.noreply.github.com>
+Date: Wed, 19 Feb 2025 22:55:03 +0100
+Subject: [PATCH 2/5] fix: WebSocket connection handling and frontend setup -
+ Fixed WebSocket connection handling in backend - Added proper WebSocket
+ headers in frontend - Updated frontend dependencies and configuration - Fixed
+ game state synchronization
+
+---
+ .gitignore             |  11 ++
+ Cargo.lock             | 146 +++++++++++++++++++++++
+ Cargo.toml             |   4 +-
+ README.md              |  51 +++++++--
+ frontend/package.json  |   7 +-
+ frontend/src/App.tsx   |  64 +++++++----
+ frontend/tsconfig.json |  26 +++++
+ src/main.rs            | 255 ++++++++++++++++++++++++++++-------------
+ 8 files changed, 452 insertions(+), 112 deletions(-)
+ create mode 100644 frontend/tsconfig.json
+
+diff --git a/.gitignore b/.gitignore
+index f188439..5fab4e1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -2,3 +2,14 @@
+ .tasks/
+ 
+ .DS_Store
++
++# Frontend
++/frontend/node_modules
++/frontend/build
++/frontend/.env.local
++/frontend/.env.development.local
++/frontend/.env.test.local
++/frontend/.env.production.local
++/frontend/npm-debug.log*
++/frontend/yarn-debug.log*
++/frontend/yarn-error.log*
+diff --git a/Cargo.lock b/Cargo.lock
+index 40d3887..57c1cae 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -748,11 +748,13 @@ dependencies = [
+  "chess",
+  "chrono",
+  "ctrlc",
++ "futures-util",
+  "hex",
+  "rand 0.8.5",
+  "serde",
+  "serde_json",
+  "tokio",
++ "tokio-tungstenite",
+ ]
+ 
+ [[package]]
+@@ -927,6 +929,21 @@ version = "1.0.7"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+ 
++[[package]]
++name = "foreign-types"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
++dependencies = [
++ "foreign-types-shared",
++]
++
++[[package]]
++name = "foreign-types-shared"
++version = "0.1.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
++
+ [[package]]
+ name = "form_urlencoded"
+ version = "1.2.1"
+@@ -978,6 +995,17 @@ version = "0.3.31"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
+ 
++[[package]]
++name = "futures-macro"
++version = "0.3.31"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.79",
++]
++
+ [[package]]
+ name = "futures-sink"
+ version = "0.3.31"
+@@ -1005,6 +1033,7 @@ dependencies = [
+  "futures-channel",
+  "futures-core",
+  "futures-io",
++ "futures-macro",
+  "futures-sink",
+  "futures-task",
+  "memchr",
+@@ -1664,6 +1693,23 @@ version = "0.10.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "defc4c55412d89136f966bbb339008b474350e5e6e78d2714439c386b3137a03"
+ 
++[[package]]
++name = "native-tls"
++version = "0.2.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a8614eb2c83d59d1c8cc974dd3f920198647674a0a035e1af1fa58707e317466"
++dependencies = [
++ "libc",
++ "log",
++ "openssl",
++ "openssl-probe",
++ "openssl-sys",
++ "schannel",
++ "security-framework",
++ "security-framework-sys",
++ "tempfile",
++]
++
+ [[package]]
+ name = "nix"
+ version = "0.29.0"
+@@ -1750,12 +1796,50 @@ version = "0.3.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+ 
++[[package]]
++name = "openssl"
++version = "0.10.68"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6174bc48f102d208783c2c84bf931bb75927a617866870de8a4ea85597f871f5"
++dependencies = [
++ "bitflags",
++ "cfg-if",
++ "foreign-types",
++ "libc",
++ "once_cell",
++ "openssl-macros",
++ "openssl-sys",
++]
++
++[[package]]
++name = "openssl-macros"
++version = "0.1.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.79",
++]
++
+ [[package]]
+ name = "openssl-probe"
+ version = "0.1.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
+ 
++[[package]]
++name = "openssl-sys"
++version = "0.9.104"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "45abf306cbf99debc8195b66b7346498d7b10c210de50418b5ccd7ceba08c741"
++dependencies = [
++ "cc",
++ "libc",
++ "pkg-config",
++ "vcpkg",
++]
++
+ [[package]]
+ name = "parity-scale-codec"
+ version = "3.6.12"
+@@ -1880,6 +1964,12 @@ dependencies = [
+  "spki",
+ ]
+ 
++[[package]]
++name = "pkg-config"
++version = "0.3.31"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
++
+ [[package]]
+ name = "powerfmt"
+ version = "0.2.0"
+@@ -2914,6 +3004,16 @@ dependencies = [
+  "syn 2.0.79",
+ ]
+ 
++[[package]]
++name = "tokio-native-tls"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
++dependencies = [
++ "native-tls",
++ "tokio",
++]
++
+ [[package]]
+ name = "tokio-rustls"
+ version = "0.26.0"
+@@ -2936,6 +3036,20 @@ dependencies = [
+  "tokio",
+ ]
+ 
++[[package]]
++name = "tokio-tungstenite"
++version = "0.21.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c83b561d025642014097b66e6c1bb422783339e0909e4429cde4749d1990bc38"
++dependencies = [
++ "futures-util",
++ "log",
++ "native-tls",
++ "tokio",
++ "tokio-native-tls",
++ "tungstenite",
++]
++
+ [[package]]
+ name = "tokio-util"
+ version = "0.7.12"
+@@ -3032,6 +3146,26 @@ version = "0.2.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+ 
++[[package]]
++name = "tungstenite"
++version = "0.21.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9ef1a641ea34f399a848dea702823bbecfb4c486f911735368f1f137cb8257e1"
++dependencies = [
++ "byteorder",
++ "bytes",
++ "data-encoding",
++ "http",
++ "httparse",
++ "log",
++ "native-tls",
++ "rand 0.8.5",
++ "sha1",
++ "thiserror",
++ "url",
++ "utf-8",
++]
++
+ [[package]]
+ name = "typenum"
+ version = "1.17.0"
+@@ -3124,12 +3258,24 @@ dependencies = [
+  "percent-encoding",
+ ]
+ 
++[[package]]
++name = "utf-8"
++version = "0.7.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
++
+ [[package]]
+ name = "valuable"
+ version = "0.1.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
+ 
++[[package]]
++name = "vcpkg"
++version = "0.2.15"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
++
+ [[package]]
+ name = "version_check"
+ version = "0.9.5"
+diff --git a/Cargo.toml b/Cargo.toml
+index 47bf7ea..56bdac7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -15,7 +15,9 @@ anyhow = "1.0.89"
+ hex = "0.4.3"
+ rand = "0.8.5"
+ chrono = "0.4"
+-ctrlc = "3.2"
++ctrlc = "3.4"
+ chess = "3.2.0"
+ serde = { version = "1.0", features = ["derive"] }
+ serde_json = "1.0"
++tokio-tungstenite = { version = "0.21.0", features = ["native-tls"] }
++futures-util = "0.3"
+diff --git a/README.md b/README.md
+index 2810e44..69fbf7a 100644
+--- a/README.md
++++ b/README.md
+@@ -4,15 +4,17 @@ A decentralized chess game implementation that uses Celestia for move storage an
+ 
+ ## Features
+ 
+-- Command-line chess interface
++- Web-based chess interface
+ - Move validation and game state management
+ - Real-time move verification on Celestia
+ - Support for standard chess notation (UCI format)
+ - Automatic game state synchronization with the blockchain
++- Real-time game updates across multiple clients
+ 
+ ## Prerequisites
+ 
+ - Rust
++- Node.js (v16 or later)
+ - Celestia light node running locally
+ 
+ ### Setting up Celestia Light Node
+@@ -25,24 +27,33 @@ celestia light start --core.ip rpc-mocha.pops.one --core.port 9090 --p2p.network
+ 
+ ## Quick Start
+ 
+-1. Build the project:
++1. Build and start the backend:
+ ```shell
+ cargo build
++cargo run
+ ```
+ 
+-2. Start a new game:
++2. Install frontend dependencies:
+ ```shell
+-cargo run
++cd frontend
++npm install
++```
++
++3. Start the frontend development server:
++```shell
++npm start
+ ```
+ 
+-3. Make moves using UCI format (e.g., "e2e4" to move pawn from e2 to e4)
++4. Open your browser and navigate to `http://localhost:3000`
+ 
+ ## How It Works
+ 
+-1. Each move is validated locally using the chess engine
+-2. Valid moves are submitted as blobs to Celestia
+-3. The game state is retrieved and verified from Celestia after each move
+-4. All game states are stored in a custom namespace on Celestia
++1. The frontend provides a visual chess board interface
++2. Each move is validated locally using the chess engine
++3. Valid moves are submitted as blobs to Celestia
++4. The game state is retrieved and verified from Celestia after each move
++5. All game states are stored in a custom namespace on Celestia
++6. Real-time updates are broadcasted to all connected clients
+ 
+ ## Move Format
+ 
+@@ -63,12 +74,21 @@ For pawn promotion, add the piece letter:
+ 
+ ### Dependencies
+ 
++Backend:
+ - `celestia_rpc`: Celestia node interaction
+ - `celestia_types`: Celestia data types
+ - `chess`: Chess game logic and validation
+ - `serde`: Game state serialization
++- `tokio-tungstenite`: WebSocket server
+ - `chrono`: Timestamp logging
+ 
++Frontend:
++- `react`: UI framework
++- `react-chessboard`: Chess board component
++- `chess.js`: Chess logic
++- `tailwindcss`: Styling
++- `websocket`: WebSocket client
++
+ ### Game State Structure
+ 
+ Each game state stored on Celestia includes:
+@@ -85,15 +105,28 @@ Each game state stored on Celestia includes:
+ /
+ ├── src/
+ │   └── main.rs        (game logic and Celestia integration)
++├── frontend/
++│   ├── src/
++│   │   ├── App.tsx    (main React component)
++│   │   └── index.tsx  (React entry point)
++│   └── public/
++│       └── index.html
+ └── README.md
+ ```
+ 
+ ### Running Tests
+ 
++Backend:
+ ```shell
+ cargo test
+ ```
+ 
++Frontend:
++```shell
++cd frontend
++npm test
++```
++
+ ## Contributing
+ 
+ Feel free to submit issues and enhancement requests!
+diff --git a/frontend/package.json b/frontend/package.json
+index 69bb9a6..2e36121 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -3,16 +3,17 @@
+   "version": "0.1.0",
+   "private": true,
+   "dependencies": {
++    "@tailwindcss/forms": "^0.5.0",
+     "@types/node": "^16.18.0",
+     "@types/react": "^18.2.0",
+     "@types/react-dom": "^18.2.0",
++    "@types/websocket": "^1.0.10",
+     "chess.js": "^1.0.0-beta.6",
+     "react": "^18.2.0",
+     "react-chessboard": "^4.3.0",
+     "react-dom": "^18.2.0",
+-    "react-scripts": "5.0.1",
++    "react-scripts": "^5.0.1",
+     "tailwindcss": "^3.4.0",
+-    "@tailwindcss/forms": "^0.5.0",
+     "typescript": "^4.9.5",
+     "websocket": "^1.0.34"
+   },
+@@ -40,4 +41,4 @@
+       "last 1 safari version"
+     ]
+   }
+-} 
+\ No newline at end of file
++}
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index fb58155..ff613db 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -1,7 +1,7 @@
+-import React, { useState, useEffect } from 'react';
++import React, { useState, useEffect, useCallback } from 'react';
+ import { Chessboard } from 'react-chessboard';
+ import { Chess } from 'chess.js';
+-import WebSocket from 'websocket';
++import { w3cwebsocket as W3CWebSocket } from 'websocket';
+ 
+ interface GameState {
+   fen: string;
+@@ -10,8 +10,15 @@ interface GameState {
+   winner: string | null;
+ }
+ 
++interface WebSocketMessage {
++  type: string;
++  move_str?: string;
++  state?: GameState;
++  message?: string;
++}
++
+ function App() {
+-  const [game, setGame] = useState(new Chess());
++  const [game, setGame] = useState<Chess>(new Chess());
+   const [gameState, setGameState] = useState<GameState>({
+     fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+     lastMove: null,
+@@ -19,10 +26,20 @@ function App() {
+     winner: null,
+   });
+   const [logs, setLogs] = useState<string[]>([]);
+-  const [ws, setWs] = useState<WebSocket.w3cwebsocket | null>(null);
++  const [ws, setWs] = useState<W3CWebSocket | null>(null);
++
++  const addLog = useCallback((message: string) => {
++    const timestamp = new Date().toISOString();
++    setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
++  }, []);
+ 
+   useEffect(() => {
+-    const client = new WebSocket.w3cwebsocket('ws://localhost:8080');
++    const client = new W3CWebSocket('ws://localhost:8080', undefined, undefined, {
++      'Upgrade': 'websocket',
++      'Connection': 'Upgrade',
++      'Sec-WebSocket-Version': '13',
++      'Sec-WebSocket-Key': 'your-key'
++    });
+ 
+     client.onopen = () => {
+       addLog('Connected to game server');
+@@ -30,13 +47,19 @@ function App() {
+ 
+     client.onmessage = (message) => {
+       if (typeof message.data === 'string') {
+-        const data = JSON.parse(message.data);
+-        if (data.type === 'gameState') {
+-          setGameState(data.state);
+-          game.load(data.state.fen);
+-          addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
+-        } else if (data.type === 'celestiaUpdate') {
+-          addLog(data.message);
++        try {
++          const data: WebSocketMessage = JSON.parse(message.data);
++          if (data.type === 'gameState' && data.state) {
++            setGameState(data.state);
++            const newGame = new Chess();
++            newGame.load(data.state.fen);
++            setGame(newGame);
++            addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
++          } else if (data.type === 'celestiaUpdate' && data.message) {
++            addLog(data.message);
++          }
++        } catch (e) {
++          addLog(`Error parsing message: ${e}`);
+         }
+       }
+     };
+@@ -45,17 +68,16 @@ function App() {
+       addLog('Disconnected from game server');
+     };
+ 
++    client.onerror = (error) => {
++      addLog(`WebSocket error: ${error.message}`);
++    };
++
+     setWs(client);
+ 
+     return () => {
+       client.close();
+     };
+-  }, []);
+-
+-  const addLog = (message: string) => {
+-    const timestamp = new Date().toISOString();
+-    setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
+-  };
++  }, [addLog]);
+ 
+   const onDrop = (sourceSquare: string, targetSquare: string) => {
+     try {
+@@ -69,11 +91,12 @@ function App() {
+ 
+       ws?.send(JSON.stringify({
+         type: 'move',
+-        move: `${sourceSquare}${targetSquare}`,
++        move_str: `${sourceSquare}${targetSquare}`,
+       }));
+ 
+       return true;
+     } catch (error) {
++      addLog(`Error making move: ${error}`);
+       return false;
+     }
+   };
+@@ -90,6 +113,7 @@ function App() {
+                   <Chessboard 
+                     position={gameState.fen}
+                     onPieceDrop={onDrop}
++                    boardWidth={400}
+                   />
+                 </div>
+                 <div className="mt-4">
+@@ -101,7 +125,7 @@ function App() {
+                   <h3 className="text-lg font-medium">Celestia Updates</h3>
+                   <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded">
+                     {logs.map((log, index) => (
+-                      <div key={index} className="text-sm font-mono">{log}</div>
++                      <div key={index} className="text-sm font-mono whitespace-pre-wrap">{log}</div>
+                     ))}
+                   </div>
+                 </div>
+diff --git a/frontend/tsconfig.json b/frontend/tsconfig.json
+new file mode 100644
+index 0000000..dae9e0d
+--- /dev/null
++++ b/frontend/tsconfig.json
+@@ -0,0 +1,26 @@
++{
++  "compilerOptions": {
++    "target": "es5",
++    "lib": [
++      "dom",
++      "dom.iterable",
++      "esnext"
++    ],
++    "allowJs": true,
++    "skipLibCheck": true,
++    "esModuleInterop": true,
++    "allowSyntheticDefaultImports": true,
++    "strict": true,
++    "forceConsistentCasingInFileNames": true,
++    "noFallthroughCasesInSwitch": true,
++    "module": "esnext",
++    "moduleResolution": "node",
++    "resolveJsonModule": true,
++    "isolatedModules": true,
++    "noEmit": true,
++    "jsx": "react-jsx"
++  },
++  "include": [
++    "src"
++  ]
++} 
+\ No newline at end of file
+diff --git a/src/main.rs b/src/main.rs
+index 08dc650..ce5b9d5 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -9,6 +9,12 @@ use chess::{Game, ChessMove, MoveGen, Color, Square, Piece, Rank, File};
+ use serde::{Serialize, Deserialize};
+ use std::str::FromStr;
+ use ctrlc;
++use tokio::net::{TcpListener, TcpStream};
++use tokio_tungstenite::{accept_async, WebSocketStream, tungstenite::Message};
++use futures_util::{SinkExt, StreamExt};
++use std::collections::HashMap;
++use tokio::sync::Mutex;
++use std::net::SocketAddr;
+ 
+ #[derive(Serialize, Deserialize, Debug, Clone)]
+ struct GameState {
+@@ -18,6 +24,18 @@ struct GameState {
+     winner: Option<String>,
+ }
+ 
++#[derive(Serialize, Deserialize, Debug)]
++struct WebSocketMessage {
++    #[serde(rename = "type")]
++    msg_type: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    move_str: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    state: Option<GameState>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    message: Option<String>,
++}
++
+ impl GameState {
+     fn from_game(game: &Game, last_move: Option<String>) -> Self {
+         let winner = if game.result().is_some() {
+@@ -159,6 +177,146 @@ fn print_board(game: &Game) {
+     println!("    a b c d e f g h\n");
+ }
+ 
++type PeerMap = Arc<Mutex<HashMap<SocketAddr, futures_util::stream::SplitSink<WebSocketStream<TcpStream>, Message>>>>;
++
++async fn handle_connection(
++    peer_map: PeerMap,
++    raw_stream: TcpStream,
++    addr: SocketAddr,
++    client: Arc<Client>,
++    namespace: Arc<Namespace>,
++    game: Arc<Mutex<Game>>,
++) {
++    let ws_stream = match tokio_tungstenite::accept_async(raw_stream).await {
++        Ok(stream) => stream,
++        Err(e) => {
++            log_with_timestamp(&format!("Failed to accept websocket connection: {}", e));
++            return;
++        }
++    };
++    
++    let (ws_sender, mut ws_receiver) = ws_stream.split();
++    
++    // Send initial game state
++    let current_game = game.lock().await;
++    let game_state = GameState::from_game(&current_game, None);
++    let initial_state = WebSocketMessage {
++        msg_type: "gameState".to_string(),
++        move_str: None,
++        state: Some(game_state),
++        message: None,
++    };
++    
++    {
++        let mut peer_map = peer_map.lock().await;
++        peer_map.insert(addr, ws_sender);
++    }
++    
++    let peer_map_clone = peer_map.clone();
++    if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
++        if let Err(e) = sender.send(Message::Text(
++            serde_json::to_string(&initial_state).unwrap()
++        )).await {
++            log_with_timestamp(&format!("Failed to send initial state: {}", e));
++            return;
++        }
++    }
++    drop(current_game);
++    
++    while let Some(result) = ws_receiver.next().await {
++        let msg = match result {
++            Ok(msg) => msg,
++            Err(e) => {
++                log_with_timestamp(&format!("Error receiving message: {}", e));
++                break;
++            }
++        };
++        
++        if let Ok(text) = msg.to_text() {
++            if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(text) {
++                match ws_msg.msg_type.as_str() {
++                    "move" => {
++                        if let Some(move_str) = ws_msg.move_str {
++                            if let Some(chess_move) = parse_uci(&move_str) {
++                                let mut current_game = game.lock().await;
++                                if current_game.make_move(chess_move) {
++                                    let game_state = GameState::from_game(&current_game, Some(move_str));
++                                    
++                                    // Submit move to Celestia
++                                    let height = client.header_network_head().await.unwrap().height();
++                                    let blob = Blob::new(
++                                        (*namespace).clone(),
++                                        serde_json::to_vec(&game_state).unwrap(),
++                                        AppVersion::V2,
++                                    ).unwrap();
++                                    
++                                    match client.blob_submit(&[blob], TxConfig::default()).await {
++                                        Ok(_) => {
++                                            let celestia_msg = WebSocketMessage {
++                                                msg_type: "celestiaUpdate".to_string(),
++                                                move_str: None,
++                                                state: None,
++                                                message: Some(format!("✅ Move submitted to Celestia at height {}", height)),
++                                            };
++                                            
++                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
++                                                if let Err(e) = sender.send(Message::Text(
++                                                    serde_json::to_string(&celestia_msg).unwrap()
++                                                )).await {
++                                                    log_with_timestamp(&format!("Failed to send Celestia update: {}", e));
++                                                    continue;
++                                                }
++                                            }
++                                            
++                                            // Broadcast new game state to all connected clients
++                                            let state_update = WebSocketMessage {
++                                                msg_type: "gameState".to_string(),
++                                                move_str: None,
++                                                state: Some(game_state),
++                                                message: None,
++                                            };
++                                            let state_msg = Message::Text(
++                                                serde_json::to_string(&state_update).unwrap()
++                                            );
++                                            
++                                            let mut peer_map = peer_map_clone.lock().await;
++                                            for (_, sender) in peer_map.iter_mut() {
++                                                if let Err(e) = sender.send(state_msg.clone()).await {
++                                                    log_with_timestamp(&format!("Failed to broadcast game state: {}", e));
++                                                }
++                                            }
++                                        }
++                                        Err(e) => {
++                                            let error_msg = WebSocketMessage {
++                                                msg_type: "celestiaUpdate".to_string(),
++                                                move_str: None,
++                                                state: None,
++                                                message: Some(format!("❌ Failed to submit move to Celestia: {}", e)),
++                                            };
++                                            
++                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
++                                                if let Err(e) = sender.send(Message::Text(
++                                                    serde_json::to_string(&error_msg).unwrap()
++                                                )).await {
++                                                    log_with_timestamp(&format!("Failed to send error message: {}", e));
++                                                }
++                                            }
++                                        }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                    _ => {}
++                }
++            }
++        }
++    }
++    
++    let mut peer_map = peer_map.lock().await;
++    peer_map.remove(&addr);
++}
++
+ #[tokio::main]
+ async fn main() -> Result<()> {
+     let running = Arc::new(AtomicBool::new(true));
+@@ -169,12 +327,12 @@ async fn main() -> Result<()> {
+     })?;
+ 
+     // Initialize Celestia client with local light node
+-    let client = Client::new("http://localhost:26658", None).await?;
+-    let namespace = Namespace::new(0, &create_namespace("chess"))?;
++    let client = Arc::new(Client::new("http://localhost:26658", None).await?);
++    let namespace = Arc::new(Namespace::new(0, &create_namespace("chess"))?);
+     
+     // Try to load existing game state from latest height
+     let height: u64 = client.header_network_head().await?.height().into();
+-    let mut game = if let Ok(Some(state)) = get_latest_game_state(&client, &namespace, height).await {
++    let initial_game = if let Ok(Some(state)) = get_latest_game_state(&client, &namespace, height).await {
+         match Game::from_str(&state.fen) {
+             Ok(g) => g,
+             Err(e) => {
+@@ -186,87 +344,26 @@ async fn main() -> Result<()> {
+         Game::new()
+     };
+     
+-    println!("Welcome to CLI Chess!");
+-    println!("Enter moves in UCI format (e.g., 'e2e4') or 'quit' to exit");
++    let game = Arc::new(Mutex::new(initial_game));
++    let peer_map = Arc::new(Mutex::new(HashMap::new()));
++    
++    let addr = "127.0.0.1:8080".to_string();
++    let listener = TcpListener::bind(&addr).await?;
++    log_with_timestamp(&format!("WebSocket server listening on: {}", addr));
+     
+     while running.load(Ordering::SeqCst) {
+-        print_board(&game);
++        let (stream, addr) = listener.accept().await?;
++        log_with_timestamp(&format!("New WebSocket connection: {}", addr));
+         
+-        if game.result().is_some() {
+-            println!("Game Over! Result: {:?}", game.result().unwrap());
+-            break;
+-        }
+-        
+-        println!("Current turn: {}", if game.side_to_move() == Color::White { "White" } else { "Black" });
+-        print!("Enter your move: ");
++        let peer_map = peer_map.clone();
++        let game = game.clone();
++        let client = client.clone();
++        let namespace = namespace.clone();
+         
+-        let mut input = String::new();
+-        std::io::stdin().read_line(&mut input)?;
+-        let input = input.trim();
+-        
+-        if input.eq_ignore_ascii_case("quit") {
+-            break;
+-        }
+-        
+-        match parse_uci(input) {
+-            Some(chess_move) => {
+-                let legal_moves: Vec<ChessMove> = MoveGen::new_legal(&game.current_position()).collect();
+-                if legal_moves.contains(&chess_move) {
+-                    game.make_move(chess_move);
+-                    println!("Move played: {}", chess_move);
+-                    
+-                    // Create and submit game state to Celestia
+-                    let state = GameState::from_game(&game, Some(chess_move.to_string()));
+-                    let state_json = serde_json::to_vec(&state)?;
+-                    let blob = Blob::new(namespace.clone(), state_json, AppVersion::V2)?;
+-                    
+-                    match client.blob_submit(&[blob], TxConfig::default()).await {
+-                        Ok(_) => {
+-                            log_with_timestamp("✅ Game state submitted to Celestia");
+-                            
+-                            // Get the latest height and verify the state immediately
+-                            let height: u64 = client.header_network_head().await?.height().into();
+-                            match get_latest_game_state(&client, &namespace, height).await {
+-                                Ok(Some(celestia_state)) => {
+-                                    // Verify the state matches what we submitted
+-                                    if celestia_state.fen != state.fen {
+-                                        log_with_timestamp("⚠️  Warning: Celestia state doesn't match local state!");
+-                                        log_with_timestamp(&format!("Local FEN: {}", state.fen));
+-                                        log_with_timestamp(&format!("Celestia FEN: {}", celestia_state.fen));
+-                                        // Revert to Celestia's state
+-                                        match Game::from_str(&celestia_state.fen) {
+-                                            Ok(g) => {
+-                                                game = g;
+-                                                log_with_timestamp("✅ Reverted to Celestia state");
+-                                            }
+-                                            Err(e) => {
+-                                                log_with_timestamp(&format!("❌ Failed to load Celestia state: {}", e));
+-                                            }
+-                                        }
+-                                    } else {
+-                                        log_with_timestamp("✅ Move verified on Celestia");
+-                                    }
+-                                }
+-                                Ok(None) => {
+-                                    log_with_timestamp("⚠️  Warning: Move not found on Celestia after submission!");
+-                                }
+-                                Err(e) => {
+-                                    log_with_timestamp(&format!("❌ Failed to verify move on Celestia: {}", e));
+-                                }
+-                            }
+-                        }
+-                        Err(e) => log_with_timestamp(&format!("❌ Failed to submit game state: {}", e)),
+-                    }
+-                } else {
+-                    println!("Illegal move! Try again.");
+-                }
+-            }
+-            None => {
+-                println!("Invalid move format! Use UCI format (e.g., 'e2e4')");
+-            }
+-        }
++        tokio::spawn(async move {
++            handle_connection(peer_map, stream, addr, client, namespace, game).await;
++        });
+     }
+     
+-    println!("Thanks for playing!");
+     Ok(())
+ }
+-- 
+2.39.5 (Apple Git-154)
+
+
+From 2053c0b8f60981a8c45f2f6d0a4227dbda3f357c Mon Sep 17 00:00:00 2001
+From: jcstein <46639943+jcstein@users.noreply.github.com>
+Date: Wed, 19 Feb 2025 22:56:12 +0100
+Subject: [PATCH 3/5] chore: update .gitignore to exclude root-level node files
+
+---
+ .gitignore | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/.gitignore b/.gitignore
+index 5fab4e1..c2c5ef2 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,6 +3,11 @@
+ 
+ .DS_Store
+ 
++# Root level node modules and package files (these should only be in frontend/)
++/node_modules
++/package.json
++/package-lock.json
++
+ # Frontend
+ /frontend/node_modules
+ /frontend/build
+-- 
+2.39.5 (Apple Git-154)
+
+
+From edb018f434cff20de7668bbd632aa1f7005632ac Mon Sep 17 00:00:00 2001
+From: jcstein <46639943+jcstein@users.noreply.github.com>
+Date: Wed, 19 Feb 2025 23:28:43 +0100
+Subject: [PATCH 4/5] fix: improve WebSocket connection handling and game state
+ updates
+
+- Add better error handling for WebSocket connections\n- Fix game state update messages to show actual moves\n- Improve connection retry logic\n- Update move display in frontend logs
+---
+ frontend/src/App.tsx | 23 +++++++++++++++++++----
+ src/main.rs          |  5 +++--
+ 2 files changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index ff613db..ec261ec 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -1,4 +1,4 @@
+-import React, { useState, useEffect, useCallback } from 'react';
++import React, { useState, useEffect, useCallback, useRef } from 'react';
+ import { Chessboard } from 'react-chessboard';
+ import { Chess } from 'chess.js';
+ import { w3cwebsocket as W3CWebSocket } from 'websocket';
+@@ -27,6 +27,15 @@ function App() {
+   });
+   const [logs, setLogs] = useState<string[]>([]);
+   const [ws, setWs] = useState<W3CWebSocket | null>(null);
++  const logsEndRef = useRef<HTMLDivElement>(null);
++
++  const scrollToBottom = () => {
++    logsEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
++  };
++
++  useEffect(() => {
++    scrollToBottom();
++  }, [logs]);
+ 
+   const addLog = useCallback((message: string) => {
+     const timestamp = new Date().toISOString();
+@@ -54,7 +63,7 @@ function App() {
+             const newGame = new Chess();
+             newGame.load(data.state.fen);
+             setGame(newGame);
+-            addLog(`Game state updated: ${data.state.lastMove || 'Initial position'}`);
++            addLog(`Game state updated${data.move_str ? `: ${data.move_str}` : ' (Initial position)'}`);
+           } else if (data.type === 'celestiaUpdate' && data.message) {
+             addLog(data.message);
+           }
+@@ -69,7 +78,12 @@ function App() {
+     };
+ 
+     client.onerror = (error) => {
+-      addLog(`WebSocket error: ${error.message}`);
++      addLog(`WebSocket error: ${error.message || 'Connection failed'}`);
++      setTimeout(() => {
++        if (client.readyState === client.CLOSED) {
++          client.close();
++        }
++      }, 1000);
+     };
+ 
+     setWs(client);
+@@ -123,10 +137,11 @@ function App() {
+                 </div>
+                 <div className="mt-4">
+                   <h3 className="text-lg font-medium">Celestia Updates</h3>
+-                  <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded">
++                  <div className="h-40 overflow-y-auto bg-gray-50 p-2 rounded" style={{ scrollBehavior: 'smooth' }}>
+                     {logs.map((log, index) => (
+                       <div key={index} className="text-sm font-mono whitespace-pre-wrap">{log}</div>
+                     ))}
++                    <div ref={logsEndRef} style={{ float: 'left', clear: 'both' }} />
+                   </div>
+                 </div>
+               </div>
+diff --git a/src/main.rs b/src/main.rs
+index ce5b9d5..439ee07 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -240,7 +240,8 @@ async fn handle_connection(
+                             if let Some(chess_move) = parse_uci(&move_str) {
+                                 let mut current_game = game.lock().await;
+                                 if current_game.make_move(chess_move) {
+-                                    let game_state = GameState::from_game(&current_game, Some(move_str));
++                                    let move_str = move_str.clone();
++                                    let game_state = GameState::from_game(&current_game, Some(move_str.clone()));
+                                     
+                                     // Submit move to Celestia
+                                     let height = client.header_network_head().await.unwrap().height();
+@@ -271,7 +272,7 @@ async fn handle_connection(
+                                             // Broadcast new game state to all connected clients
+                                             let state_update = WebSocketMessage {
+                                                 msg_type: "gameState".to_string(),
+-                                                move_str: None,
++                                                move_str: Some(move_str.clone()),
+                                                 state: Some(game_state),
+                                                 message: None,
+                                             };
+-- 
+2.39.5 (Apple Git-154)
+
+
+From f9282eb78ed3f9fb17cafc749998837e769b86bd Mon Sep 17 00:00:00 2001
+From: jcstein <46639943+jcstein@users.noreply.github.com>
+Date: Wed, 19 Feb 2025 23:39:51 +0100
+Subject: [PATCH 5/5] feat: improve logging
+
+---
+ src/main.rs | 102 +++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 90 insertions(+), 12 deletions(-)
+
+diff --git a/src/main.rs b/src/main.rs
+index 439ee07..c943dac 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -268,6 +268,66 @@ async fn handle_connection(
+                                                     continue;
+                                                 }
+                                             }
++
++                                            // Wait for the next block and verify the blob was included
++                                            let verify_msg = WebSocketMessage {
++                                                msg_type: "celestiaUpdate".to_string(),
++                                                move_str: None,
++                                                state: None,
++                                                message: Some("🔍 Verifying move inclusion in Celestia...".to_string()),
++                                            };
++                                            if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
++                                                let _ = sender.send(Message::Text(
++                                                    serde_json::to_string(&verify_msg).unwrap()
++                                                )).await;
++                                            }
++
++                                            // Wait for a few seconds to allow the block to be created
++                                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
++                                            
++                                            // Get the current height and check the last few blocks
++                                            let current_height = client.header_network_head().await.unwrap().height();
++                                            let mut found = false;
++                                            for h in (u64::from(height)..=u64::from(current_height)).rev() {
++                                                if let Ok(Some(blobs)) = client.blob_get_all(h, &[(*namespace).clone()]).await {
++                                                    for blob in blobs {
++                                                        if let Ok(state) = serde_json::from_slice::<GameState>(&blob.data) {
++                                                            if state.last_move == Some(move_str.clone()) {
++                                                                found = true;
++                                                                let verify_success_msg = WebSocketMessage {
++                                                                    msg_type: "celestiaUpdate".to_string(),
++                                                                    move_str: None,
++                                                                    state: None,
++                                                                    message: Some(format!("✅ Move verified in Celestia at height {}", h)),
++                                                                };
++                                                                if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
++                                                                    let _ = sender.send(Message::Text(
++                                                                        serde_json::to_string(&verify_success_msg).unwrap()
++                                                                    )).await;
++                                                                }
++                                                                break;
++                                                            }
++                                                        }
++                                                    }
++                                                }
++                                                if found {
++                                                    break;
++                                                }
++                                            }
++
++                                            if !found {
++                                                let verify_fail_msg = WebSocketMessage {
++                                                    msg_type: "celestiaUpdate".to_string(),
++                                                    move_str: None,
++                                                    state: None,
++                                                    message: Some("⚠️ Move submission verified but inclusion not yet confirmed".to_string()),
++                                                };
++                                                if let Some(sender) = peer_map_clone.lock().await.get_mut(&addr) {
++                                                    let _ = sender.send(Message::Text(
++                                                        serde_json::to_string(&verify_fail_msg).unwrap()
++                                                    )).await;
++                                                }
++                                            }
+                                             
+                                             // Broadcast new game state to all connected clients
+                                             let state_update = WebSocketMessage {
+@@ -353,18 +413,36 @@ async fn main() -> Result<()> {
+     log_with_timestamp(&format!("WebSocket server listening on: {}", addr));
+     
+     while running.load(Ordering::SeqCst) {
+-        let (stream, addr) = listener.accept().await?;
+-        log_with_timestamp(&format!("New WebSocket connection: {}", addr));
+-        
+-        let peer_map = peer_map.clone();
+-        let game = game.clone();
+-        let client = client.clone();
+-        let namespace = namespace.clone();
+-        
+-        tokio::spawn(async move {
+-            handle_connection(peer_map, stream, addr, client, namespace, game).await;
+-        });
++        tokio::select! {
++            accept_result = listener.accept() => {
++                match accept_result {
++                    Ok((stream, addr)) => {
++                        log_with_timestamp(&format!("New WebSocket connection: {}", addr));
++                        
++                        let peer_map = peer_map.clone();
++                        let game = game.clone();
++                        let client = client.clone();
++                        let namespace = namespace.clone();
++                        
++                        tokio::spawn(async move {
++                            handle_connection(peer_map, stream, addr, client, namespace, game).await;
++                        });
++                    }
++                    Err(e) => {
++                        log_with_timestamp(&format!("Failed to accept connection: {}", e));
++                    }
++                }
++            }
++            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
++                // Check running flag periodically
++                if !running.load(Ordering::SeqCst) {
++                    log_with_timestamp("Received shutdown signal, stopping server...");
++                    break;
++                }
++            }
++        }
+     }
+-    
++
++    log_with_timestamp("Server shutdown complete");
+     Ok(())
+ }
+-- 
+2.39.5 (Apple Git-154)
+
