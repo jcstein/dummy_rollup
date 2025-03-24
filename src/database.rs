@@ -8,7 +8,8 @@ use crate::schema::{DatabaseError, DatabaseMetadata, Record};
 pub struct DatabaseClient {
     client: Client,
     namespace: Namespace,
-    metadata: DatabaseMetadata,
+    metadata: Option<DatabaseMetadata>,
+    search_limit: Option<u64>,
 }
 
 // Helper function to get current timestamp for logging
@@ -18,7 +19,12 @@ fn log_with_timestamp(message: &str) {
 }
 
 impl DatabaseClient {
-    pub async fn new(client: Client, namespace_bytes: Vec<u8>, start_height: Option<u64>) -> Result<Self, DatabaseError> {
+    pub async fn new(
+        client: Client, 
+        namespace_bytes: Vec<u8>, 
+        _start_height: Option<u64>, // Kept for API compatibility but ignored
+        search_limit: Option<u64>
+    ) -> Result<Self, DatabaseError> {
         if namespace_bytes.len() != 8 {
             return Err(DatabaseError::InvalidNamespace("Namespace must be exactly 8 bytes".to_string()));
         }
@@ -29,91 +35,92 @@ impl DatabaseClient {
         let mut db_client = Self {
             client,
             namespace,
-            metadata: DatabaseMetadata::default(),
+            metadata: None,
+            search_limit,
         };
 
-        // Load or create metadata
-        db_client.metadata = db_client.load_or_create_metadata(start_height).await?;
+        // Try to discover existing database within search_limit blocks
+        if let Some(metadata) = db_client.discover_database().await? {
+            log_with_timestamp(&format!("Found existing database at height {}", metadata.start_height));
+            db_client.metadata = Some(metadata);
+        } else {
+            // Create new database at current height
+            let latest_height = db_client.client.header_local_head()
+                .await
+                .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?
+                .height()
+                .value();
+            
+            let metadata = DatabaseMetadata {
+                start_height: latest_height,
+                record_count: 0,
+                last_updated: chrono::Utc::now(),
+            };
+            
+            log_with_timestamp(&format!("Creating new database (estimating height {})", latest_height));
+            
+            // Save metadata and get the actual inclusion height
+            let actual_height = db_client.save_metadata(&metadata).await?;
+            
+            // Update metadata with actual height
+            let updated_metadata = DatabaseMetadata {
+                start_height: actual_height,
+                record_count: 0,
+                last_updated: chrono::Utc::now(),
+            };
+            
+            log_with_timestamp(&format!("Database created at height {}", actual_height));
+            db_client.metadata = Some(updated_metadata);
+        }
 
         Ok(db_client)
     }
 
-    async fn load_or_create_metadata(&self, start_height: Option<u64>) -> Result<DatabaseMetadata, DatabaseError> {
-        // Get the latest height from the Celestia client
+    async fn discover_database(&self) -> Result<Option<DatabaseMetadata>, DatabaseError> {
         let latest_height = self.client.header_local_head()
             .await
             .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?
             .height()
             .value();
-
-        // If a specific start height was provided, check if there's metadata at that height first
-        if let Some(height) = start_height {
-            log_with_timestamp(&format!("Checking for existing metadata at height {}", height));
-            match self.get_blobs_at_height(height).await {
-                Ok(blobs) => {
-                    for blob in blobs {
-                        // Try to parse as metadata
-                        if let Ok(metadata) = serde_json::from_slice::<DatabaseMetadata>(&blob.data) {
-                            log_with_timestamp(&format!("Found existing metadata at height {}", height));
-                            return Ok(metadata);
-                        }
-                    }
-                }
-                Err(_) => {
-                    log_with_timestamp(&format!("No metadata found at height {}, will create new", height));
-                },
-            }
-            
-            // No metadata found at the specified height, create new with the specified start height
-            let metadata = DatabaseMetadata {
-                start_height: height,
-                record_count: 0,
-                last_updated: chrono::Utc::now(),
-            };
-
-            // Save the new metadata
-            log_with_timestamp(&format!("Creating new metadata with start height {}", height));
-            self.save_metadata(&metadata).await?;
-
-            return Ok(metadata);
-        }
-
-        // Try to find existing metadata by searching in recent blocks
-        log_with_timestamp("Searching for existing metadata in recent blocks");
         
-        // Search in the most recent 1000 blocks or from height 1 if less than 1000
-        let search_start_height = if latest_height > 1000 { latest_height - 1000 } else { 1 };
-        
-        for height in (search_start_height..=latest_height).rev() {
-            match self.get_blobs_at_height(height).await {
-                Ok(blobs) => {
-                    for blob in blobs {
-                        // Try to parse as metadata
-                        if let Ok(metadata) = serde_json::from_slice::<DatabaseMetadata>(&blob.data) {
-                            log_with_timestamp(&format!("Found existing metadata at height {}", height));
-                            return Ok(metadata);
-                        }
-                    }
-                }
-                Err(_) => continue, // Error retrieving blobs, try next height
+        // Determine search range based on search_limit
+        let start_height = if let Some(limit) = self.search_limit {
+            if latest_height > limit {
+                latest_height - limit
+            } else {
+                1
             }
-        }
-
-        // No metadata found, create new
-        let metadata = DatabaseMetadata {
-            start_height: latest_height,
-            record_count: 0,
-            last_updated: chrono::Utc::now(),
+        } else {
+            // If no search_limit, just check the most recent 1000 blocks
+            if latest_height > 1000 {
+                latest_height - 1000
+            } else {
+                1
+            }
         };
-
-        // Save the new metadata
-        log_with_timestamp("No existing metadata found, creating new");
-        self.save_metadata(&metadata).await?;
-
-        Ok(metadata)
+        
+        log_with_timestamp(&format!("Searching for existing database (blocks {}..{})", start_height, latest_height));
+        
+        // Search for metadata
+        for height in (start_height..=latest_height).rev() {
+            match self.get_blobs_at_height(height).await {
+                Ok(blobs) => {
+                    for blob in blobs {
+                        // Try to parse as metadata
+                        if let Ok(metadata) = serde_json::from_slice::<DatabaseMetadata>(&blob.data) {
+                            return Ok(Some(metadata));
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        
+        log_with_timestamp("No existing database found within search range");
+        Ok(None)
     }
-
-    async fn save_metadata(&self, metadata: &DatabaseMetadata) -> Result<(), DatabaseError> {
+    
+    async fn save_metadata(&self, metadata: &DatabaseMetadata) -> Result<u64, DatabaseError> {
         let metadata_json = serde_json::to_vec(metadata)
             .map_err(|e| DatabaseError::SerializationError(e.to_string()))?;
 
@@ -123,11 +130,40 @@ impl DatabaseClient {
             AppVersion::V2,
         ).map_err(|e| DatabaseError::CelestiaError(e.to_string()))?;
 
-        self.client.blob_submit(&[blob], Default::default())
+        let response = self.client.blob_submit(&[blob], Default::default())
             .await
             .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?;
-
-        Ok(())
+            
+        // Debug the response content
+        log_with_timestamp(&format!("Submit response: {:?}", response));
+        
+        // Try to access height using different approaches
+        let inclusion_height = if let Ok(serde_value) = serde_json::to_value(&response) {
+            if let Some(height_value) = serde_value.get("height") {
+                if let Some(height_num) = height_value.as_u64() {
+                    Some(height_num)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        // Get the current height as fallback
+        let current_height = self.client.header_local_head()
+            .await
+            .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?
+            .height()
+            .value();
+            
+        // Use the inclusion height if available, otherwise use current height
+        let final_height = inclusion_height.unwrap_or(current_height);
+        log_with_timestamp(&format!("Using height: {}", final_height));
+        
+        Ok(final_height)
     }
 
     async fn get_blobs_at_height(&self, height: u64) -> Result<Vec<Blob>, DatabaseError> {
@@ -151,6 +187,18 @@ impl DatabaseClient {
             .await
             .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?;
 
+        // Update metadata record count
+        if let Some(mut metadata) = self.metadata.clone() {
+            metadata.record_count += 1;
+            metadata.last_updated = chrono::Utc::now();
+            
+            // Update metadata synchronously - slightly slower but simpler
+            // We ignore any errors to avoid failing the add operation
+            if let Ok(_) = self.save_metadata(&metadata).await {
+                // Successfully updated metadata
+            }
+        }
+
         Ok(())
     }
 
@@ -160,11 +208,20 @@ impl DatabaseClient {
             .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?
             .height()
             .value();
-
-        let start_height = self.metadata.start_height;
-        log_with_timestamp(&format!("Searching for record with key '{}' (start height: {})", key, start_height));
         
-        // Search from the start height to the latest height
+        // Get start height from metadata if available
+        let start_height = if let Some(metadata) = &self.metadata {
+            metadata.start_height
+        } else {
+            1 // Fallback to beginning if no metadata (shouldn't happen)
+        };
+        
+        log_with_timestamp(&format!(
+            "Searching for record with key '{}' (database start: {}, current height: {})", 
+            key, start_height, latest_height
+        ));
+        
+        // Search from start height to the latest height
         for height in (start_height..=latest_height).rev() {
             match self.get_blobs_at_height(height).await {
                 Ok(blobs) => {
@@ -187,18 +244,29 @@ impl DatabaseClient {
     }
 
     pub async fn list_records(&self) -> Result<Vec<Record>, DatabaseError> {
+        log_with_timestamp("Listing all records");
+        
         let latest_height = self.client.header_local_head()
             .await
             .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?
             .height()
             .value();
-
-        let start_height = self.metadata.start_height;
-        log_with_timestamp(&format!("Listing all records (start height: {})", start_height));
+        
+        // Get start height from metadata if available
+        let start_height = if let Some(metadata) = &self.metadata {
+            metadata.start_height
+        } else {
+            1 // Fallback to beginning if no metadata (shouldn't happen)
+        };
+        
+        log_with_timestamp(&format!(
+            "Listing all records (database start: {}, current height: {})", 
+            start_height, latest_height
+        ));
         
         let mut records_map: HashMap<String, Record> = HashMap::new();
         
-        // Search from the start height to the latest height
+        // Search from start height to the latest height
         for height in (start_height..=latest_height).rev() {
             match self.get_blobs_at_height(height).await {
                 Ok(blobs) => {

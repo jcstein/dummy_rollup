@@ -77,7 +77,6 @@ async fn handle_command(db: &DatabaseClient, cmd: Command) -> Result<(), Databas
             }
         }
         Command::List => {
-            log_with_timestamp("Listing all records");
             let records = db.list_records().await?;
             if records.is_empty() {
                 println!("No records found");
@@ -116,27 +115,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 || args.len() > 3 {
         log_with_timestamp("Error: Invalid number of arguments");
-        println!("Usage: cargo run -- <namespace_plaintext> [start_height]");
+        println!("Usage: cargo run -- <namespace_plaintext> [search_limit_blocks]");
+        println!("  namespace_plaintext: A unique identifier for your database");
+        println!("  search_limit_blocks: (Optional) Maximum number of blocks to search back from current height");
         return Ok(());
     }
     
     let namespace_plaintext = &args[1];
-    let start_height = if args.len() == 3 {
+    
+    let search_limit = if args.len() == 3 {
         match args[2].parse::<u64>() {
-            Ok(height) => {
-                log_with_timestamp(&format!("Configuration - Namespace: {}, Start Height: {}", namespace_plaintext, height));
-                Some(height)
+            Ok(limit) => {
+                log_with_timestamp(&format!("Block search limit: {} blocks", limit));
+                Some(limit)
             },
             Err(_) => {
-                log_with_timestamp("Error: Invalid start height, must be a positive number");
-                println!("Usage: cargo run -- <namespace_plaintext> [start_height]");
+                log_with_timestamp("Error: Invalid search limit, must be a positive number");
+                println!("Usage: cargo run -- <namespace_plaintext> [search_limit_blocks]");
                 return Ok(());
             }
         }
     } else {
-        log_with_timestamp(&format!("Configuration - Namespace: {}", namespace_plaintext));
         None
     };
+    
+    log_with_timestamp(&format!("Configuration - Namespace: {}", namespace_plaintext));
     
     // Ensure namespace is exactly 8 bytes (Celestia requirement)
     let mut namespace_bytes = namespace_plaintext.as_bytes().to_vec();
@@ -156,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| Box::new(DatabaseError::CelestiaError(e.to_string())) as Box<dyn std::error::Error>)?;
     log_with_timestamp("Successfully connected to Celestia node");
     
-    let db_client = DatabaseClient::new(client, namespace_bytes, start_height).await?;
+    let db_client = DatabaseClient::new(client, namespace_bytes, None, search_limit).await?;
     log_with_timestamp("Database client initialized");
 
     println!("\nAvailable commands:");
