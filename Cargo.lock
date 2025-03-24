@@ -419,9 +419,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-rpc"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc214d362b640e22d255b1c8684c0a364dd71b52c78d3203b40e19d4083df75a"
+checksum = "690a9415ed49a0720919c22a09b3f79384ed76b49c0a226dfd925a1037907a10"
 dependencies = [
  "async-trait",
  "celestia-types",
@@ -435,9 +435,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-types"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f374b7b5c9545815ff4aeaa66007abe0ed121626677880a001938a36c3a66a8"
+checksum = "18e0fa0f7432d59891db755b883f4a70d5f0fa42b63a6b9c0a440563d59dfa39"
 dependencies = [
  "base64",
  "bech32",
