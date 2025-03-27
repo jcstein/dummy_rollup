@@ -43,7 +43,7 @@ Run the application with a namespace parameter and an optional search limit:
 cargo run -- <namespace> [search_limit_blocks]
 ```
 
-The namespace will be padded or truncated to exactly 8 bytes as required by Celestia.
+The namespace will be padded or truncated to exactly 10 bytes as required by Celestia.
 
 ### Search Limit Parameter
 
@@ -153,7 +153,7 @@ $ cargo run -- newdb 1000
 
 - **Authentication errors**: Make sure you have set the `CELESTIA_NODE_AUTH_TOKEN` environment variable or started your node with `--rpc.skip-auth`
 - **Connection errors**: Verify that your Celestia node is running and accessible at the default RPC endpoint (http://localhost:26658)
-- **Namespace errors**: Ensure your namespace is valid (will be automatically padded/truncated to 8 bytes)
+- **Namespace errors**: Ensure your namespace is valid (will be automatically padded/truncated to 10 bytes)
 - **Performance issues**: If searching for records is slow, use a smaller search_limit value
 
 ## License

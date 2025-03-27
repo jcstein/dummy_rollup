@@ -141,14 +141,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     log_with_timestamp(&format!("Configuration - Namespace: {}", namespace_plaintext));
     
-    // Ensure namespace is exactly 8 bytes (Celestia requirement)
-    let mut namespace_bytes = namespace_plaintext.as_bytes().to_vec();
-    if namespace_bytes.len() > 8 {
-        namespace_bytes.truncate(8);
+    // Ensure namespace is exactly 10 bytes with zero-prefix padding
+    let mut namespace_bytes = vec![0; 10]; // Initialize with 10 zero bytes
+    let input_bytes = namespace_plaintext.as_bytes();
+    if input_bytes.len() > 10 {
+        // If input is too long, take last 10 bytes
+        namespace_bytes.copy_from_slice(&input_bytes[input_bytes.len()-10..]);
     } else {
-        while namespace_bytes.len() < 8 {
-            namespace_bytes.push(0);
-        }
+        // If input is shorter, copy to the end of the buffer (right-aligned)
+        let start_idx = 10 - input_bytes.len();
+        namespace_bytes[start_idx..].copy_from_slice(input_bytes);
     }
     
     // Create database client

@@ -25,8 +25,8 @@ impl DatabaseClient {
         _start_height: Option<u64>, // Kept for API compatibility but ignored
         search_limit: Option<u64>
     ) -> Result<Self, DatabaseError> {
-        if namespace_bytes.len() != 8 {
-            return Err(DatabaseError::InvalidNamespace("Namespace must be exactly 8 bytes".to_string()));
+        if namespace_bytes.len() != 10 {
+            return Err(DatabaseError::InvalidNamespace("Namespace must be exactly 10 bytes".to_string()));
         }
 
         let namespace = Namespace::new(0, &namespace_bytes)
