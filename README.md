@@ -50,6 +50,7 @@ The namespace will be padded or truncated to exactly 10 bytes as required by Cel
 The search limit parameter controls how many blocks back the database will search to discover existing data:
 
 - When specified, the database will search up to this many blocks back from the current height to find existing data
+- If not specified, it defaults to 100 blocks
 - If it finds an existing database, it will use that database's starting block for all operations
 - If no existing database is found, it creates a new one at the current height
 - This parameter is only used during database initialization and not for subsequent operations
@@ -72,13 +73,13 @@ Once the application is running, you can use the following commands:
 ## Example
 
 ```
-$ cargo run -- testdb 1000
+$ cargo run -- testdb
 [2025-02-25 21:03:07.775] Starting Celestia database application
-[2025-02-25 21:03:07.776] Block search limit: 1000 blocks
+[2025-02-25 21:03:07.776] Block search limit: 100 blocks
 [2025-02-25 21:03:07.776] Configuration - Namespace: testdb
 [2025-02-25 21:03:07.776] Connecting to Celestia node...
 [2025-02-25 21:03:07.777] Successfully connected to Celestia node
-[2025-02-25 21:03:07.778] Searching for existing database (blocks 123789..124789)
+[2025-02-25 21:03:07.778] Searching for existing database (blocks 123689..123789)
 [2025-02-25 21:03:07.779] Found existing database at height 123500
 [2025-02-25 21:03:07.781] Database client initialized
 
@@ -114,13 +115,13 @@ Created: 2025-02-25T21:03:15.123Z
 Here's another example of starting a brand new database:
 
 ```
-$ cargo run -- newdb 1000
+$ cargo run -- newdb
 [2025-02-25 21:04:07.775] Starting Celestia database application
-[2025-02-25 21:04:07.776] Block search limit: 1000 blocks
+[2025-02-25 21:04:07.776] Block search limit: 100 blocks
 [2025-02-25 21:04:07.776] Configuration - Namespace: newdb
 [2025-02-25 21:04:07.776] Connecting to Celestia node...
 [2025-02-25 21:04:07.777] Successfully connected to Celestia node
-[2025-02-25 21:04:07.778] Searching for existing database (blocks 124000..125000)
+[2025-02-25 21:04:07.778] Searching for existing database (blocks 124900..125000)
 [2025-02-25 21:04:07.779] No existing database found within search range
 [2025-02-25 21:04:07.780] Creating new database (estimating height 125000)
 [2025-02-25 21:04:07.781] Submit response: {"height":5334862}
