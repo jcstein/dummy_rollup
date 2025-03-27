@@ -91,9 +91,9 @@ impl DatabaseClient {
                 1
             }
         } else {
-            // If no search_limit, just check the most recent 1000 blocks
-            if latest_height > 1000 {
-                latest_height - 1000
+            // If no search_limit, just check the most recent 100 blocks
+            if latest_height > 100 {
+                latest_height - 100
             } else {
                 1
             }
@@ -173,31 +173,42 @@ impl DatabaseClient {
             .ok_or_else(|| DatabaseError::CelestiaError("No blobs found".to_string()))
     }
 
-    pub async fn add_record(&self, record: Record) -> Result<(), DatabaseError> {
+    pub async fn add_record(&mut self, record: Record) -> Result<(), DatabaseError> {
+        let mut blobs = Vec::new();
+
+        // Prepare record blob
         let record_json = serde_json::to_vec(&record)
             .map_err(|e| DatabaseError::SerializationError(e.to_string()))?;
-
-        let blob = Blob::new(
+        let record_blob = Blob::new(
             self.namespace.clone(),
             record_json,
             AppVersion::V2,
         ).map_err(|e| DatabaseError::CelestiaError(e.to_string()))?;
+        blobs.push(record_blob);
 
-        self.client.blob_submit(&[blob], Default::default())
+        // Prepare metadata blob if needed
+        if let Some(metadata) = &self.metadata {
+            let mut updated_metadata = metadata.clone();
+            updated_metadata.record_count += 1;
+            updated_metadata.last_updated = chrono::Utc::now();
+            
+            let metadata_json = serde_json::to_vec(&updated_metadata)
+                .map_err(|e| DatabaseError::SerializationError(e.to_string()))?;
+            let metadata_blob = Blob::new(
+                self.namespace.clone(),
+                metadata_json,
+                AppVersion::V2,
+            ).map_err(|e| DatabaseError::CelestiaError(e.to_string()))?;
+            blobs.push(metadata_blob);
+
+            // Update in-memory metadata
+            self.metadata = Some(updated_metadata);
+        }
+
+        // Submit both blobs in a single transaction
+        self.client.blob_submit(&blobs, Default::default())
             .await
             .map_err(|e| DatabaseError::CelestiaError(e.to_string()))?;
-
-        // Update metadata record count
-        if let Some(mut metadata) = self.metadata.clone() {
-            metadata.record_count += 1;
-            metadata.last_updated = chrono::Utc::now();
-            
-            // Update metadata synchronously - slightly slower but simpler
-            // We ignore any errors to avoid failing the add operation
-            if let Ok(_) = self.save_metadata(&metadata).await {
-                // Successfully updated metadata
-            }
-        }
 
         Ok(())
     }
