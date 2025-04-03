@@ -54,7 +54,7 @@ impl FromStr for Command {
     }
 }
 
-async fn handle_command(db: &DatabaseClient, cmd: Command) -> Result<(), DatabaseError> {
+async fn handle_command(db: &mut DatabaseClient, cmd: Command) -> Result<(), DatabaseError> {
     match cmd {
         Command::Add(key, value) => {
             log_with_timestamp(&format!("Adding record with key '{}'", key));
@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| Box::new(DatabaseError::CelestiaError(e.to_string())) as Box<dyn std::error::Error>)?;
     log_with_timestamp("Successfully connected to Celestia node");
     
-    let db_client = DatabaseClient::new(client, namespace_bytes, None, search_limit).await?;
+    let mut db_client = DatabaseClient::new(client, namespace_bytes, None, search_limit).await?;
     log_with_timestamp("Database client initialized");
 
     println!("\nAvailable commands:");
@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match Command::from_str(&input) {
             Ok(cmd) => {
-                if let Err(e) = handle_command(&db_client, cmd).await {
+                if let Err(e) = handle_command(&mut db_client, cmd).await {
                     log_with_timestamp(&format!("Error: {}", e));
                 }
             }
